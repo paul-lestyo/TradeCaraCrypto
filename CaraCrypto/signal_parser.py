@@ -1,0 +1,152 @@
+# Tujuan
+# Parser Gemini single-call untuk extraction + classification sekaligus.
+# Caller
+# __main__ signal processing loop.
+# Dependensi
+# google.generativeai, database, models.
+# Main Functions
+# `parse_and_classify`.
+# Side Effects
+# Memanggil Gemini API dan update row messages.
+
+from __future__ import annotations
+
+import asyncio
+import json
+from decimal import Decimal
+from typing import Any, Dict, Optional
+
+import google.generativeai as genai
+
+from .config import GeminiConfig
+from .database import Database
+from .models import Direction, GeminiAction, MessageContext, OrderType, RiskLevel, TradeAction
+
+
+class SignalParser:
+    def __init__(self, config: GeminiConfig, db: Database):
+        self.config = config
+        self.db = db
+        if self.config.api_key:
+            genai.configure(api_key=self.config.api_key)
+        print(
+            "[SignalParser] Ready "
+            f"model={self.config.model} "
+            f"api_key={'set' if bool(self.config.api_key) else 'missing'}"
+        )
+
+    def _build_prompt(self, context: MessageContext) -> str:
+        order_hint = self._infer_order_type_hint(context.current_message.text)
+        action_hint = self._infer_action_hint(context.current_message.text)
+        return (
+            "Kamu parser signal Caracrypto. Return JSON saja dengan field: "
+            "action, pair, direction, order_type, entry_price, take_profit_levels, stop_loss, risk_level, close_percentage. "
+            "Action valid: new_signal, update_sl, set_sl_breakeven, tp_partial, cancel, reverse, re_entry, cutloss, skip. "
+            f"Message: {context.current_message.text}\n"
+            f"Reply text: {context.current_message.reply_text}\n"
+            f"History: {context.history}\n"
+            f"Running pairs: {context.position_state.running_pairs}\n"
+            f"Order hint: {order_hint}\n"
+            f"Action hint: {action_hint}\n"
+            "Hint: NOW/entry NOW => market. antri/limit/kuning/tunggu kuning => limit. "
+            "Tag [OPEN]/[CLOSED] condong new_signal, [CANCEL] condong cancel."
+        )
+
+    def _infer_order_type_hint(self, text: str) -> str:
+        t = (text or "").lower()
+        if "entry now" in t or "now" in t:
+            return "market"
+        if any(k in t for k in ["antri", "limit", "kuning", "tunggu kuning"]):
+            return "limit"
+        return "unknown"
+
+    def _infer_action_hint(self, text: str) -> str:
+        t = (text or "").upper()
+        if "[CANCEL]" in t:
+            return "cancel"
+        if "[OPEN]" in t or "[CLOSED]" in t:
+            return "new_signal"
+        return "unknown"
+
+    def _collect_images(self, context: MessageContext) -> list:
+        images = []
+        if context.current_message.image_data:
+            images.append(context.current_message.image_data)
+        if context.current_message.reply_image_data:
+            images.append(context.current_message.reply_image_data)
+        return images
+
+    async def _call_gemini(self, prompt: str) -> Dict[str, Any]:
+        model = genai.GenerativeModel(self.config.model)
+        for i in range(3):
+            try:
+                resp = await asyncio.to_thread(model.generate_content, prompt)
+                text = (resp.text or "").strip()
+                if text.startswith("```"):
+                    text = text.strip("`")
+                    text = text.replace("json", "", 1).strip()
+                return json.loads(text)
+            except Exception:
+                if i == 2:
+                    raise
+                await asyncio.sleep(5)
+        return {"action": "skip"}
+
+    def _validate_and_build_action(self, payload: Dict[str, Any]) -> Optional[TradeAction]:
+        try:
+            action = GeminiAction(payload["action"])
+        except Exception:
+            return None
+        if action == GeminiAction.SKIP:
+            return TradeAction(action=action, raw_response=payload)
+        pair = payload.get("pair")
+        direction = Direction(payload["direction"]) if payload.get("direction") else None
+        order_type = OrderType(payload["order_type"]) if payload.get("order_type") else None
+        entry_price = Decimal(str(payload["entry_price"])) if payload.get("entry_price") is not None else None
+        tp_levels = [Decimal(str(x)) for x in payload.get("take_profit_levels", [])] if payload.get("take_profit_levels") else None
+        stop_loss = Decimal(str(payload["stop_loss"])) if payload.get("stop_loss") is not None else None
+        risk_raw = payload.get("risk_level", "normal")
+        try:
+            risk_level = RiskLevel((risk_raw or "normal").lower())
+        except Exception:
+            risk_level = RiskLevel.NORMAL
+        return TradeAction(
+            action=action,
+            pair=pair,
+            direction=direction,
+            order_type=order_type,
+            entry_price=entry_price,
+            take_profit_levels=tp_levels,
+            stop_loss=stop_loss,
+            risk_level=risk_level,
+            close_percentage=payload.get("close_percentage"),
+            raw_response=payload,
+        )
+
+    async def parse_and_classify(self, context: MessageContext, message_db_id: int) -> Optional[TradeAction]:
+        prompt = self._build_prompt(context)
+        images = self._collect_images(context)
+        print(
+            "[SignalParser] "
+            f"message_id={context.current_message.message_id} "
+            f"group={context.current_message.group_id} "
+            f"images={len(images)} "
+            f"history={len(context.history)} "
+            f"running_pairs={context.position_state.running_pairs}"
+        )
+        payload = await self._call_gemini(prompt)
+        print(f"[SignalParser] Gemini parsed payload={payload}")
+        _ = self._collect_images(context)
+        action = self._validate_and_build_action(payload)
+        if not action:
+            print(f"[SignalParser] Invalid payload -> skip message_db_id={message_db_id}")
+            await self.db.update_message_gemini_response(message_db_id, payload, "skip")
+            return None
+        print(
+            "[SignalParser] "
+            f"message_db_id={message_db_id} action={action.action.value} "
+            f"pair={action.pair} order_type={action.order_type.value if action.order_type else None} "
+            f"risk={action.risk_level.value}"
+        )
+        await self.db.update_message_gemini_response(message_db_id, payload, action.action.value)
+        return action

@@ -1,0 +1,57 @@
+# Tujuan
+# Orkestrasi app + postgres untuk deployment lokal.
+# Caller
+# docker compose up.
+# Dependensi
+# Docker engine.
+# Main Functions
+# Definisi service dan env binding.
+# Side Effects
+# Menjalankan container app/database.
+
+version: "3.8"
+services:
+  app:
+    build: .
+    container_name: caracrypto-trader
+    stdin_open: true
+    tty: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - TELEGRAM_API_ID=${TELEGRAM_API_ID}
+      - TELEGRAM_API_HASH=${TELEGRAM_API_HASH}
+      - TELEGRAM_PHONE=${TELEGRAM_PHONE}
+      - TELEGRAM_GROUPS=${TELEGRAM_GROUPS}
+      - BINANCE_API_KEY=${BINANCE_API_KEY}
+      - BINANCE_API_SECRET=${BINANCE_API_SECRET}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_MODEL=${GEMINI_MODEL}
+      - DATABASE_URL=postgresql+asyncpg://trader:${POSTGRES_PASSWORD}@postgres:5432/caracrypto
+      - WUZAPI_TOKEN=${WUZAPI_TOKEN}
+      - WUZAPI_PHONE=${WUZAPI_PHONE}
+      - TRADE_MARGIN_PERCENT=${TRADE_MARGIN_PERCENT}
+    volumes:
+      - ./sessions:/app/sessions
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: caracrypto-db
+    environment:
+      POSTGRES_DB: caracrypto
+      POSTGRES_USER: trader
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "5443:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trader -d caracrypto"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
