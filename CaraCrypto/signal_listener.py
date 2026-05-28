@@ -39,6 +39,43 @@ class SignalListener:
             return True
         return topic_id in allowed_topics
 
+    def _extract_topic_id(self, message) -> Optional[int]:
+        # Common Telethon field when message is inside a forum topic.
+        topic_id = getattr(message, "reply_to_top_id", None)
+        if topic_id is not None:
+            return topic_id
+
+        # Some updates expose forum data under nested reply_to object.
+        reply_to = getattr(message, "reply_to", None)
+        if reply_to is not None:
+            nested_top = getattr(reply_to, "reply_to_top_id", None)
+            if nested_top is not None:
+                return nested_top
+
+            nested_msg = getattr(reply_to, "reply_to_msg_id", None)
+            if getattr(reply_to, "forum_topic", False) and nested_msg is not None:
+                return nested_msg
+
+        # Last fallback for thread-starter style message.
+        if getattr(message, "forum_topic", False):
+            return getattr(message, "id", None)
+
+        return None
+
+    def _build_topic_debug(self, message) -> str:
+        reply_to = getattr(message, "reply_to", None)
+        nested_forum = getattr(reply_to, "forum_topic", None) if reply_to is not None else None
+        nested_top = getattr(reply_to, "reply_to_top_id", None) if reply_to is not None else None
+        nested_msg = getattr(reply_to, "reply_to_msg_id", None) if reply_to is not None else None
+        return (
+            f"reply_to_top_id={getattr(message, 'reply_to_top_id', None)} "
+            f"reply_to_msg_id={getattr(message, 'reply_to_msg_id', None)} "
+            f"forum_topic={getattr(message, 'forum_topic', None)} "
+            f"nested_forum_topic={nested_forum} "
+            f"nested_reply_to_top_id={nested_top} "
+            f"nested_reply_to_msg_id={nested_msg}"
+        )
+
     async def start(self) -> None:
         self.client = TelegramClient("sessions/caracrypto", self.config.api_id, self.config.api_hash)
         try:
@@ -70,8 +107,10 @@ class SignalListener:
 
     async def _handle_new_message(self, event) -> None:
         group_id = event.chat_id
-        topic_id = getattr(event.message, "reply_to_top_id", None)
+        topic_id = self._extract_topic_id(event.message)
         print(f"[SignalListener] New message detected group={group_id} topic={topic_id} message_id={event.message.id}")
+        if topic_id is None and self.config.forum_topics.get(group_id):
+            print(f"[SignalListener] Topic debug message_id={event.message.id} {self._build_topic_debug(event.message)}")
         if not self._should_process_message(group_id, topic_id):
             print(f"[SignalListener] Skipped message_id={event.message.id} due to group/topic filter")
             return
@@ -149,7 +188,7 @@ class SignalListener:
                 RawSignalMessage(
                     text=new_text,
                     group_id=group_id,
-                    topic_id=getattr(event.message, "reply_to_top_id", None),
+                    topic_id=self._extract_topic_id(event.message),
                     message_id=message_id,
                     is_edit=True,
                 )
