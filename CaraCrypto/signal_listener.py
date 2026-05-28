@@ -108,12 +108,9 @@ class SignalListener:
     async def _handle_new_message(self, event) -> None:
         group_id = event.chat_id
         topic_id = self._extract_topic_id(event.message)
-        print(f"[SignalListener] New message detected group={group_id} topic={topic_id} message_id={event.message.id}")
-        if topic_id is None and self.config.forum_topics.get(group_id):
-            print(f"[SignalListener] Topic debug message_id={event.message.id} {self._build_topic_debug(event.message)}")
         if not self._should_process_message(group_id, topic_id):
-            print(f"[SignalListener] Skipped message_id={event.message.id} due to group/topic filter")
             return
+        print(f"[SignalListener] New message detected group={group_id} topic={topic_id} message_id={event.message.id}")
         image_data = await self._extract_media(event.message)
         reply_text, reply_image_data, reply_to_message_id = await self._resolve_reply_chain(event)
         raw = RawSignalMessage(
