@@ -93,6 +93,9 @@ def test_prompt_declares_yellow_level_as_entry_property():
     )
     prompt = p._build_prompt(context)
     assert "garis/label kuning adalah area ENTRY" in prompt
+    assert "Jangan ambil bid/ask box, current price" in prompt
+    assert "untuk SHORT gunakan level kuning paling atas" in prompt
+    assert "untuk LONG gunakan level kuning paling bawah" in prompt
     assert "entry_price wajib diisi" in prompt
 
 
