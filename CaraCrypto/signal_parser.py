@@ -3,20 +3,23 @@
 # Caller
 # __main__ signal processing loop.
 # Dependensi
-# google.generativeai, database, models.
+# google.generativeai, Pillow, database, models.
 # Main Functions
-# `parse_and_classify`.
+# `parse_and_classify`, image-aware Gemini call, validasi enum tolerant-case, normalisasi pair.
 # Side Effects
 # Memanggil Gemini API dan update row messages.
 
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 from decimal import Decimal
+from enum import Enum
 from typing import Any, Dict, Optional
 
 import google.generativeai as genai
+from PIL import Image
 
 from .config import GeminiConfig
 from .database import Database
@@ -49,6 +52,9 @@ class SignalParser:
             f"Order hint: {order_hint}\n"
             f"Action hint: {action_hint}\n"
             "Hint: NOW/entry NOW => market. antri/limit/kuning/tunggu kuning => limit. "
+            "Untuk image chart Caracrypto: garis/label kuning adalah area ENTRY; isi entry_price dari level kuning terdekat. "
+            "Garis/label merah biasanya STOP LOSS. Garis/label hijau biasanya TAKE PROFIT bertingkat. "
+            "Jika order_type=limit, entry_price wajib diisi dari level entry visual/teks; jangan null kecuali benar-benar tidak terlihat. "
             "Tag [OPEN]/[CLOSED] condong new_signal, [CANCEL] condong cancel."
         )
 
@@ -76,11 +82,24 @@ class SignalParser:
             images.append(context.current_message.reply_image_data)
         return images
 
-    async def _call_gemini(self, prompt: str) -> Dict[str, Any]:
+    def _build_gemini_content(self, prompt: str, images: list) -> Any:
+        if not images:
+            return prompt
+        content = [prompt]
+        for image_data in images:
+            try:
+                with Image.open(io.BytesIO(image_data)) as img:
+                    content.append(img.copy())
+            except Exception:
+                continue
+        return content if len(content) > 1 else prompt
+
+    async def _call_gemini(self, prompt: str, images: Optional[list] = None) -> Dict[str, Any]:
         model = genai.GenerativeModel(self.config.model)
+        content = self._build_gemini_content(prompt, images or [])
         for i in range(3):
             try:
-                resp = await asyncio.to_thread(model.generate_content, prompt)
+                resp = await asyncio.to_thread(model.generate_content, content)
                 text = (resp.text or "").strip()
                 if text.startswith("```"):
                     text = text.strip("`")
@@ -92,22 +111,39 @@ class SignalParser:
                 await asyncio.sleep(5)
         return {"action": "skip"}
 
+    def _normalize_enum_value(self, value: Any) -> str:
+        if isinstance(value, Enum):
+            value = value.value
+        return str(value).strip().lower()
+
+    def _enum_from_payload(self, enum_type, value: Any):
+        return enum_type(self._normalize_enum_value(value))
+
+    def _normalize_pair(self, pair: Any) -> Optional[str]:
+        if pair is None:
+            return None
+        symbol = str(pair).strip().upper().replace("/", "").replace(" ", "")
+        return symbol or None
+
     def _validate_and_build_action(self, payload: Dict[str, Any]) -> Optional[TradeAction]:
         try:
-            action = GeminiAction(payload["action"])
+            action = self._enum_from_payload(GeminiAction, payload["action"])
         except Exception:
             return None
         if action == GeminiAction.SKIP:
             return TradeAction(action=action, raw_response=payload)
-        pair = payload.get("pair")
-        direction = Direction(payload["direction"]) if payload.get("direction") else None
-        order_type = OrderType(payload["order_type"]) if payload.get("order_type") else None
-        entry_price = Decimal(str(payload["entry_price"])) if payload.get("entry_price") is not None else None
-        tp_levels = [Decimal(str(x)) for x in payload.get("take_profit_levels", [])] if payload.get("take_profit_levels") else None
-        stop_loss = Decimal(str(payload["stop_loss"])) if payload.get("stop_loss") is not None else None
+        try:
+            pair = self._normalize_pair(payload.get("pair"))
+            direction = self._enum_from_payload(Direction, payload["direction"]) if payload.get("direction") else None
+            order_type = self._enum_from_payload(OrderType, payload["order_type"]) if payload.get("order_type") else None
+            entry_price = Decimal(str(payload["entry_price"])) if payload.get("entry_price") is not None else None
+            tp_levels = [Decimal(str(x)) for x in payload.get("take_profit_levels", [])] if payload.get("take_profit_levels") else None
+            stop_loss = Decimal(str(payload["stop_loss"])) if payload.get("stop_loss") is not None else None
+        except Exception:
+            return None
         risk_raw = payload.get("risk_level", "normal")
         try:
-            risk_level = RiskLevel((risk_raw or "normal").lower())
+            risk_level = self._enum_from_payload(RiskLevel, risk_raw or "normal")
         except Exception:
             risk_level = RiskLevel.NORMAL
         return TradeAction(
@@ -134,9 +170,8 @@ class SignalParser:
             f"history={len(context.history)} "
             f"running_pairs={context.position_state.running_pairs}"
         )
-        payload = await self._call_gemini(prompt)
+        payload = await self._call_gemini(prompt, images)
         print(f"[SignalParser] Gemini parsed payload={payload}")
-        _ = self._collect_images(context)
         action = self._validate_and_build_action(payload)
         if not action:
             print(f"[SignalParser] Invalid payload -> skip message_db_id={message_db_id}")

@@ -5,12 +5,13 @@
 # Dependensi
 # python-binance, position_manager, alert_service.
 # Main Functions
-# `execute_action` dan handler per jenis aksi.
+# `execute_action`, validasi order executable, dan handler per jenis aksi.
 # Side Effects
 # Menempatkan/cancel/close order di Binance.
 
 from __future__ import annotations
 
+from collections.abc import Sequence as SequenceABC
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Optional, Sequence
@@ -47,16 +48,78 @@ class TradeEngine:
     def get_leverage(self, pair: str) -> int:
         return LEVERAGE_MAP.get(pair, DEFAULT_LEVERAGE)
 
+    def _normalize_pair(self, pair: str) -> str:
+        return str(pair or "").strip().upper().replace("/", "").replace(" ", "")
+
+    def _create_futures_order(self, **kwargs) -> Any:
+        if hasattr(self.client, "new_order"):
+            return self.client.new_order(**kwargs)
+        if hasattr(self.client, "futures_create_order"):
+            return self.client.futures_create_order(**kwargs)
+        raise AttributeError("Binance client has no futures order creation method")
+
+    def _extract_order_id(self, response: Any, fallback: str) -> str:
+        if isinstance(response, dict):
+            for key in ("orderId", "clientOrderId", "origClientOrderId"):
+                value = response.get(key)
+                if value is not None:
+                    return str(value)
+        return fallback
+
+    async def _get_market_reference_price(self, pair: str) -> Optional[Decimal]:
+        methods = (
+            ("mark_price", ("markPrice", "price")),
+            ("futures_mark_price", ("markPrice", "price")),
+            ("ticker_price", ("price",)),
+            ("futures_symbol_ticker", ("price",)),
+            ("get_symbol_ticker", ("price",)),
+        )
+        for method_name, price_keys in methods:
+            fn = getattr(self.client, method_name, None)
+            if not callable(fn):
+                continue
+            try:
+                response = fn(symbol=pair)
+            except Exception:
+                continue
+            candidates = []
+            if isinstance(response, dict):
+                candidates.extend(response.get(key) for key in price_keys)
+            elif isinstance(response, SequenceABC) and not isinstance(response, (str, bytes)):
+                for item in response:
+                    if isinstance(item, dict) and item.get("symbol") == pair:
+                        candidates.extend(item.get(key) for key in price_keys)
+            else:
+                candidates.append(response)
+            for candidate in candidates:
+                if candidate is None:
+                    continue
+                try:
+                    price = Decimal(str(candidate))
+                except Exception:
+                    continue
+                if price > 0:
+                    return price
+        return None
+
     async def _set_margin_mode_cross(self, pair: str) -> None:
         try:
-            self.client.change_margin_type(symbol=pair, marginType=MARGIN_MODE)
+            if hasattr(self.client, "change_margin_type"):
+                self.client.change_margin_type(symbol=pair, marginType=MARGIN_MODE)
+            elif hasattr(self.client, "futures_change_margin_type"):
+                self.client.futures_change_margin_type(symbol=pair, marginType=MARGIN_MODE)
         except Exception:
             # Biasanya error kalau already CROSS; aman diabaikan.
             pass
 
     async def _set_leverage(self, pair: str, leverage: int) -> int:
         try:
-            resp = self.client.change_leverage(symbol=pair, leverage=leverage)
+            if hasattr(self.client, "change_leverage"):
+                resp = self.client.change_leverage(symbol=pair, leverage=leverage)
+            elif hasattr(self.client, "futures_change_leverage"):
+                resp = self.client.futures_change_leverage(symbol=pair, leverage=leverage)
+            else:
+                return leverage
             return int(resp.get("leverage", leverage))
         except Exception:
             return leverage
@@ -103,14 +166,17 @@ class TradeEngine:
 
     async def _place_market_order(self, action: TradeAction, qty: Decimal) -> str:
         side = "BUY" if action.direction == Direction.LONG else "SELL"
+        fallback = f"market-{action.pair}-{int(datetime.now(timezone.utc).timestamp())}"
         if action.pair:
-            self.client.new_order(symbol=action.pair, side=side, type="MARKET", quantity=str(qty))
-        return f"market-{action.pair}-{int(datetime.now(timezone.utc).timestamp())}"
+            response = self._create_futures_order(symbol=action.pair, side=side, type="MARKET", quantity=str(qty))
+            return self._extract_order_id(response, fallback)
+        return fallback
 
     async def _place_limit_order(self, action: TradeAction, qty: Decimal) -> str:
         side = "BUY" if action.direction == Direction.LONG else "SELL"
+        fallback = f"limit-{action.pair}-{int(datetime.now(timezone.utc).timestamp())}"
         if action.pair and action.entry_price is not None:
-            self.client.new_order(
+            response = self._create_futures_order(
                 symbol=action.pair,
                 side=side,
                 type="LIMIT",
@@ -118,48 +184,78 @@ class TradeEngine:
                 price=str(action.entry_price),
                 timeInForce="GTC",
             )
-        return f"limit-{action.pair}-{int(datetime.now(timezone.utc).timestamp())}"
+            return self._extract_order_id(response, fallback)
+        return fallback
 
-    async def execute_action(self, action: TradeAction, message_db_id: Optional[int] = None) -> None:
+    async def execute_action(self, action: TradeAction, message_db_id: Optional[int] = None) -> bool:
         if action.action == GeminiAction.SKIP:
-            return
+            return False
         if action.action == GeminiAction.NEW_SIGNAL:
-            await self._handle_new_signal(action, message_db_id)
+            return await self._handle_new_signal(action, message_db_id)
         elif action.action == GeminiAction.RE_ENTRY:
-            await self._handle_re_entry(action, message_db_id)
+            return await self._handle_re_entry(action, message_db_id)
         elif action.action == GeminiAction.UPDATE_SL:
             await self._handle_update_sl(action, message_db_id)
+            return True
         elif action.action == GeminiAction.SET_SL_BREAKEVEN:
             await self._handle_set_sl_breakeven(action, message_db_id)
+            return True
         elif action.action == GeminiAction.TP_PARTIAL:
             await self._handle_tp_partial(action, message_db_id)
+            return True
         elif action.action == GeminiAction.CUTLOSS:
             await self._handle_cutloss(action, message_db_id)
+            return True
         elif action.action == GeminiAction.CANCEL:
             await self._handle_cancel(action, message_db_id)
+            return True
         elif action.action == GeminiAction.REVERSE:
-            await self._handle_reverse(action, message_db_id)
+            return await self._handle_reverse(action, message_db_id)
+        return False
 
-    async def _handle_new_signal(self, action: TradeAction, message_db_id: Optional[int]) -> None:
-        if not action.pair or not action.direction or not action.entry_price:
-            return
+    async def _handle_new_signal(self, action: TradeAction, message_db_id: Optional[int]) -> bool:
+        if not action.pair or not action.direction:
+            await self._safe_alert("notify_error", "trade_engine_new_signal", "missing pair or direction")
+            return False
+        action.pair = self._normalize_pair(action.pair)
+        if not action.pair:
+            await self._safe_alert("notify_error", "trade_engine_new_signal", "empty pair after normalization")
+            return False
+        order_type = action.order_type or OrderType.MARKET
+        if action.entry_price is None:
+            if order_type == OrderType.MARKET:
+                action.entry_price = await self._get_market_reference_price(action.pair)
+            if action.entry_price is None:
+                await self._safe_alert(
+                    "notify_error",
+                    "trade_engine_new_signal",
+                    f"missing entry_price for {order_type.value} order pair={action.pair}",
+                )
+                return False
         leverage = self.get_leverage(action.pair)
         if not await self._check_risk_limits(action.pair, action.entry_price, action.risk_level, leverage):
-            return
+            return False
         await self._set_margin_mode_cross(action.pair)
         leverage = await self._set_leverage(action.pair, leverage)
         qty = self._calculate_position_size(action.entry_price, leverage, action.risk_level)
         if qty <= 0:
-            return
+            return False
         margin_used = Decimal("1000") * Decimal(str(self.risk_config.trade_margin_percent)) / Decimal("100")
         if action.risk_level == RiskLevel.HIGH:
             margin_used *= Decimal(str(self.risk_config.high_risk_multiplier))
         order_id = ""
-        order_type = action.order_type or OrderType.MARKET
-        if order_type == OrderType.LIMIT:
-            order_id = await self._place_limit_order(action, qty)
-        else:
-            order_id = await self._place_market_order(action, qty)
+        try:
+            if order_type == OrderType.LIMIT:
+                order_id = await self._place_limit_order(action, qty)
+            else:
+                order_id = await self._place_market_order(action, qty)
+        except Exception as exc:
+            await self._safe_alert(
+                "notify_error",
+                "trade_engine_order",
+                f"pair={action.pair} type={order_type.value} err={exc}",
+            )
+            return False
         pos = RunningPosition(
             pair=action.pair,
             direction=action.direction,
@@ -194,6 +290,7 @@ class TradeEngine:
             str(final_tp) if final_tp is not None else None,
             action.action.value,
         )
+        return True
 
     async def _set_tp_sl_orders(self, pos: RunningPosition) -> None:
         final_tp: Optional[Decimal] = None
@@ -247,12 +344,12 @@ class TradeEngine:
 
     async def _place_take_profit_market_order(self, pair: str, direction: Direction, tp_price: Decimal) -> None:
         side = "SELL" if direction == Direction.LONG else "BUY"
-        self.client.new_order(symbol=pair, side=side, type="TAKE_PROFIT_MARKET", stopPrice=str(tp_price), closePosition="true")
+        self._create_futures_order(symbol=pair, side=side, type="TAKE_PROFIT_MARKET", stopPrice=str(tp_price), closePosition="true")
         await self._safe_alert("notify_modification", pair, "set_tp", f"final_tp={tp_price}")
 
     async def _place_stop_market_order(self, pair: str, direction: Direction, sl_price: Decimal) -> None:
         side = "SELL" if direction == Direction.LONG else "BUY"
-        self.client.new_order(symbol=pair, side=side, type="STOP_MARKET", stopPrice=str(sl_price), closePosition="true")
+        self._create_futures_order(symbol=pair, side=side, type="STOP_MARKET", stopPrice=str(sl_price), closePosition="true")
         await self._safe_alert("notify_modification", pair, "set_sl", f"sl={sl_price}")
 
     async def _handle_update_sl(self, action: TradeAction, message_db_id: Optional[int]) -> None:
@@ -315,9 +412,9 @@ class TradeEngine:
         await self._safe_alert("notify_closed", action.pair, "cancel")
         await self.db.store_modification_log(action.pair, "cancel", {}, message_db_id)
 
-    async def _handle_reverse(self, action: TradeAction, message_db_id: Optional[int]) -> None:
+    async def _handle_reverse(self, action: TradeAction, message_db_id: Optional[int]) -> bool:
         if not action.pair:
-            return
+            return False
         old = self.position_manager.get_position(action.pair)
         if old:
             await self._cleanup_protection_orders(action.pair)
@@ -334,7 +431,8 @@ class TradeEngine:
                 order_type=action.order_type,
                 risk_level=action.risk_level,
             )
-            await self._handle_new_signal(reversed_action, message_db_id)
+            return await self._handle_new_signal(reversed_action, message_db_id)
+        return False
 
-    async def _handle_re_entry(self, action: TradeAction, message_db_id: Optional[int]) -> None:
-        await self._handle_new_signal(action, message_db_id)
+    async def _handle_re_entry(self, action: TradeAction, message_db_id: Optional[int]) -> bool:
+        return await self._handle_new_signal(action, message_db_id)

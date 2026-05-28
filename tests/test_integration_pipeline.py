@@ -5,7 +5,7 @@
 # Dependensi
 # CaraCrypto.__main__._process_one_signal.
 # Main Functions
-# Validasi skenario 14.2.
+# Validasi skenario 14.2 dan gating subscribe watcher.
 # Side Effects
 # Tidak ada.
 
@@ -44,11 +44,13 @@ class _Parser:
 
 
 class _Engine:
-    def __init__(self):
+    def __init__(self, result=True):
+        self.result = result
         self.calls = []
 
     async def execute_action(self, action, message_db_id):
         self.calls.append((action, message_db_id))
+        return self.result
 
 
 class _Watcher:
@@ -77,6 +79,25 @@ async def test_full_flow_message_to_execute_property():
     assert len(db.stored) == 1
     assert len(engine.calls) == 1
     assert watcher.subscribed == ["BTCUSDT"]
+
+
+@pytest.mark.asyncio
+async def test_rejected_order_does_not_subscribe_watcher_property():
+    db = _Db()
+    watcher = _Watcher()
+    engine = _Engine(result=False)
+    action = TradeAction(
+        action=GeminiAction.NEW_SIGNAL,
+        pair="PROMPTUSDT",
+        direction=Direction.LONG,
+        order_type=OrderType.LIMIT,
+        risk_level=RiskLevel.NORMAL,
+    )
+    parser = _Parser(action)
+    raw = RawSignalMessage(text="[OPEN] PROMPT", group_id=-1, message_id=4)
+    await _process_one_signal(raw, db, _ContextBuilder(), parser, engine, watcher)
+    assert len(engine.calls) == 1
+    assert watcher.subscribed == []
 
 
 @pytest.mark.asyncio

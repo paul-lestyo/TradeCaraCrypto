@@ -5,7 +5,7 @@
 # Dependensi
 # CaraCrypto.trade_engine, CaraCrypto.models.
 # Main Functions
-# Validasi property task 11.6 (baseline).
+# Validasi property task 11.6, order executable, dan adapter Binance.
 # Side Effects
 # Tidak ada.
 
@@ -32,10 +32,37 @@ class _Client:
 
     def new_order(self, **kwargs):
         self.orders.append(kwargs)
-        return {"ok": True}
+        return {"orderId": 1000 + len(self.orders)}
 
     def futures_get_open_orders(self, **_):
         return [{"orderId": 10, "type": "STOP_MARKET"}, {"orderId": 11, "type": "TAKE_PROFIT_MARKET"}]
+
+    def futures_cancel_order(self, **kwargs):
+        self.canceled.append(kwargs)
+        return {"status": "CANCELED"}
+
+
+class _PythonBinanceClient:
+    def __init__(self):
+        self.orders = []
+        self.canceled = []
+        self.margin_calls = []
+        self.leverage_calls = []
+
+    def futures_change_margin_type(self, **kwargs):
+        self.margin_calls.append(kwargs)
+        return {}
+
+    def futures_change_leverage(self, **kwargs):
+        self.leverage_calls.append(kwargs)
+        return {"leverage": kwargs.get("leverage", 50)}
+
+    def futures_create_order(self, **kwargs):
+        self.orders.append(kwargs)
+        return {"orderId": 2000 + len(self.orders)}
+
+    def futures_get_open_orders(self, **_):
+        return []
 
     def futures_cancel_order(self, **kwargs):
         self.canceled.append(kwargs)
@@ -51,6 +78,9 @@ class _DB:
 
 
 class _Alert:
+    def __init__(self):
+        self.errors = []
+
     async def notify_new_order(self, *_):
         return None
 
@@ -59,6 +89,9 @@ class _Alert:
 
     async def notify_risk_limit(self, *_):
         return None
+
+    async def notify_error(self, *args):
+        self.errors.append(args)
 
 
 class _PM:
@@ -85,7 +118,7 @@ class _PM:
         return list(self.m.keys())
 
 
-def _engine():
+def _engine(client=None):
     risk = SimpleNamespace(
         trade_margin_percent=1.0,
         high_risk_multiplier=0.5,
@@ -93,7 +126,7 @@ def _engine():
         max_position_size_percent=200.0,
         daily_loss_limit_percent=5.0,
     )
-    return TradeEngine(_Client(), _DB(), _Alert(), _PM(), risk)
+    return TradeEngine(client or _Client(), _DB(), _Alert(), _PM(), risk)
 
 
 def test_fixed_leverage_property():
@@ -107,6 +140,25 @@ def test_final_tp_level_property():
     e = _engine()
     assert e._get_final_tp_level(Direction.LONG, [Decimal("10"), Decimal("12")]) == Decimal("12")
     assert e._get_final_tp_level(Direction.SHORT, [Decimal("10"), Decimal("12")]) == Decimal("10")
+
+
+def test_python_binance_order_adapter_property():
+    client = _PythonBinanceClient()
+    e = _engine(client)
+    response = e._create_futures_order(symbol="BTCUSDT", side="BUY", type="MARKET", quantity="0.1")
+    assert response["orderId"] == 2001
+    assert client.orders[0]["symbol"] == "BTCUSDT"
+
+
+@pytest.mark.asyncio
+async def test_python_binance_margin_and_leverage_adapter_property():
+    client = _PythonBinanceClient()
+    e = _engine(client)
+    await e._set_margin_mode_cross("BTCUSDT")
+    leverage = await e._set_leverage("BTCUSDT", 125)
+    assert client.margin_calls[0]["symbol"] == "BTCUSDT"
+    assert client.leverage_calls[0]["leverage"] == 125
+    assert leverage == 125
 
 
 @pytest.mark.asyncio
@@ -134,3 +186,38 @@ async def test_sl_breakeven_replaces_old_sl_order():
     stop_orders = [o for o in e.client.orders if o.get("type") == "STOP_MARKET"]
     assert stop_orders
     assert stop_orders[-1].get("stopPrice") == "100"
+
+
+@pytest.mark.asyncio
+async def test_limit_order_without_entry_rejected_property():
+    e = _engine()
+    accepted = await e.execute_action(
+        TradeAction(
+            action=GeminiAction.NEW_SIGNAL,
+            pair="PROMPTUSDT",
+            direction=Direction.LONG,
+            order_type=OrderType.LIMIT,
+            risk_level=RiskLevel.NORMAL,
+        )
+    )
+    assert accepted is False
+    assert e.client.orders == []
+    assert not e.position_manager.has_position("PROMPTUSDT")
+
+
+@pytest.mark.asyncio
+async def test_limit_order_normalizes_pair_and_stores_real_order_id_property():
+    e = _engine()
+    accepted = await e.execute_action(
+        TradeAction(
+            action=GeminiAction.NEW_SIGNAL,
+            pair="JELLY/USDT",
+            direction=Direction.LONG,
+            order_type=OrderType.LIMIT,
+            entry_price=Decimal("0.01"),
+            risk_level=RiskLevel.NORMAL,
+        )
+    )
+    assert accepted is True
+    assert e.client.orders[0]["symbol"] == "JELLYUSDT"
+    assert e.position_manager.get_position("JELLYUSDT").order_id == "1001"

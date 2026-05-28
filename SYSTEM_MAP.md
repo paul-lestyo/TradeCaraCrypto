@@ -17,8 +17,8 @@
 2. `database.py` menyimpan row `messages` sebelum Gemini.
 3. `context_builder.py` menyiapkan konteks (history + position state).
 4. `signal_parser.py` single-call Gemini (extract + classify), lalu update row yang sama.
-5. `trade_engine.py` mengeksekusi aksi non-skip ke Binance dengan dispatch action, risk checks, sizing, TP/SL safety order, dan queue sederhana saat limit posisi tercapai.
-6. `price_watcher.py` monitor harga + user data stream untuk fill/closure.
+5. `trade_engine.py` memvalidasi aksi executable lalu mengeksekusi aksi non-skip ke Binance dengan dispatch action, risk checks, sizing, TP/SL safety order, dan queue sederhana saat limit posisi tercapai.
+6. `price_watcher.py` monitor harga + user data stream untuk fill/closure setelah pipeline subscribe hanya pada order yang diterima engine.
 7. `alert_service.py` kirim notifikasi WhatsApp.
 
 ## Data Access
@@ -30,12 +30,15 @@
 ## Konfigurasi
 - `config.py`: env + static config (group/topic, leverage map, risk).
 
+## Scripts
+- `scripts/e2e_image_to_binance_testnet.py`: skenario operator untuk image signal -> TradeAction -> TradeEngine -> Binance Futures testnet.
+
 ## Modul Inti
 - `config.py`: loader env + dataclass konfigurasi aplikasi.
 - `models.py`: enum domain dan dataclass payload/state/result.
 - `signal_listener.py`: listener Telethon untuk new message + edit event + reply/image context.
-- `signal_parser.py`: Gemini single-call parser, hint klasifikasi, validasi action.
-- `trade_engine.py`: action executor Binance-API-like client (client diinjeksikan, tidak hard-couple ke satu path import).
+- `signal_parser.py`: Gemini single-call parser text+image, hint klasifikasi, validasi action.
+- `trade_engine.py`: action executor Binance-API-like client (client diinjeksikan, adapter `new_order`/`futures_create_order`, dan return status eksekusi untuk gating watcher).
 - `price_watcher.py`: alert-only price watcher + handler user data stream events.
 - `database.py`: SQLAlchemy async DAL 3 tabel.
 - `alert_service.py`: sender notifikasi WhatsApp (WuzAPI).

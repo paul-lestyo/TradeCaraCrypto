@@ -5,7 +5,7 @@
 # Dependensi
 # Semua module internal + Binance client.
 # Main Functions
-# `main()` dan loop pemrosesan signal.
+# `main()`, loop pemrosesan signal, dan subscribe watcher pasca eksekusi order.
 # Side Effects
 # Menjalankan koneksi DB, Telegram, dan network service.
 
@@ -70,8 +70,8 @@ async def _process_one_signal(raw, db, context_builder, parser, engine, watcher)
             print(f"[Pipeline] message_id={raw.message_id} action=skip")
             return
         print(f"[Pipeline] message_id={raw.message_id} action={action.action.value} pair={action.pair}")
-        await engine.execute_action(action, message_db_id)
-        if action.action in {GeminiAction.NEW_SIGNAL, GeminiAction.RE_ENTRY} and action.pair:
+        executed = await engine.execute_action(action, message_db_id)
+        if action.action in {GeminiAction.NEW_SIGNAL, GeminiAction.RE_ENTRY} and action.pair and executed:
             await _subscribe_watcher(watcher, action.pair, action)
             print(f"[Watcher] Subscribed pair={action.pair}")
         return
@@ -95,8 +95,8 @@ async def _process_one_signal(raw, db, context_builder, parser, engine, watcher)
         print(f"[Pipeline] message_id={raw.message_id} action=skip")
         return
     print(f"[Pipeline] message_id={raw.message_id} action={action.action.value} pair={action.pair}")
-    await engine.execute_action(action, message_db_id)
-    if action.action in {GeminiAction.NEW_SIGNAL, GeminiAction.RE_ENTRY} and action.pair:
+    executed = await engine.execute_action(action, message_db_id)
+    if action.action in {GeminiAction.NEW_SIGNAL, GeminiAction.RE_ENTRY} and action.pair and executed:
         await _subscribe_watcher(watcher, action.pair, action)
         print(f"[Watcher] Subscribed pair={action.pair}")
 
