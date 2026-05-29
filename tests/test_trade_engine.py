@@ -41,6 +41,12 @@ class _Client:
         self.canceled.append(kwargs)
         return {"status": "CANCELED"}
 
+    def balance(self, **_):
+        return [{"asset": "USDT", "availableBalance": "1000"}]
+
+    def futures_exchange_info(self, **_):
+        return {"symbols": []}
+
 
 class _PythonBinanceClient:
     def __init__(self):
@@ -67,6 +73,9 @@ class _PythonBinanceClient:
     def futures_cancel_order(self, **kwargs):
         self.canceled.append(kwargs)
         return {"status": "CANCELED"}
+
+    def futures_account_balance(self, **_):
+        return [{"asset": "USDT", "availableBalance": "1000"}]
 
 
 class _DB:
@@ -123,7 +132,6 @@ def _engine(client=None):
         trade_margin_percent=1.0,
         high_risk_multiplier=0.5,
         max_concurrent_positions=5,
-        max_position_size_percent=200.0,
         daily_loss_limit_percent=5.0,
     )
     return TradeEngine(client or _Client(), _DB(), _Alert(), _PM(), risk)
@@ -221,3 +229,67 @@ async def test_limit_order_normalizes_pair_and_stores_real_order_id_property():
     assert accepted is True
     assert e.client.orders[0]["symbol"] == "JELLYUSDT"
     assert e.position_manager.get_position("JELLYUSDT").order_id == "1001"
+
+
+@pytest.mark.asyncio
+async def test_limit_order_normalizes_price_and_quantity_by_symbol_filters_property():
+    class _ClientWithFilters(_Client):
+        def futures_exchange_info(self, **_):
+            return {
+                "symbols": [
+                    {
+                        "symbol": "BRETTUSDT",
+                        "filters": [
+                            {"filterType": "PRICE_FILTER", "tickSize": "0.0001"},
+                            {"filterType": "LOT_SIZE", "stepSize": "1"},
+                        ],
+                    }
+                ]
+            }
+
+    e = _engine(_ClientWithFilters())
+    accepted = await e.execute_action(
+        TradeAction(
+            action=GeminiAction.NEW_SIGNAL,
+            pair="BRETTUSDT",
+            direction=Direction.LONG,
+            order_type=OrderType.LIMIT,
+            entry_price=Decimal("0.123456"),
+            risk_level=RiskLevel.NORMAL,
+        )
+    )
+    assert accepted is True
+    assert e.client.orders[0]["quantity"] == "40500"
+    assert e.client.orders[0]["price"] == "0.1234"
+
+
+@pytest.mark.asyncio
+async def test_limit_order_uses_entry_zone_average_then_normalizes_ticksize_property():
+    class _ClientWithFilters(_Client):
+        def futures_exchange_info(self, **_):
+            return {
+                "symbols": [
+                    {
+                        "symbol": "BRETTUSDT",
+                        "filters": [
+                            {"filterType": "PRICE_FILTER", "tickSize": "0.0001"},
+                            {"filterType": "LOT_SIZE", "stepSize": "1"},
+                        ],
+                    }
+                ]
+            }
+
+    e = _engine(_ClientWithFilters())
+    accepted = await e.execute_action(
+        TradeAction(
+            action=GeminiAction.NEW_SIGNAL,
+            pair="BRETTUSDT",
+            direction=Direction.SHORT,
+            order_type=OrderType.LIMIT,
+            entry_zone=[Decimal("0.006601"), Decimal("0.006643")],
+            risk_level=RiskLevel.NORMAL,
+        )
+    )
+    assert accepted is True
+    assert e.client.orders[0]["price"] == "0.0066"
+    assert e.position_manager.get_position("BRETTUSDT").entry_price == Decimal("0.0066")

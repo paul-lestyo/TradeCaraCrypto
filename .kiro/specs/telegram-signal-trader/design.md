@@ -1259,7 +1259,6 @@ class AlertConfig:
 @dataclass
 class RiskConfig:
     max_concurrent_positions: int = 5
-    max_position_size_percent: Decimal = Decimal("5.0")
     daily_loss_limit_percent: Decimal = Decimal("10.0")
     high_risk_multiplier: Decimal = Decimal("0.5")
     trade_margin_percent: Decimal = Decimal("1.0")  # TRADE_MARGIN_PERCENT: % of balance used as margin per trade
@@ -1883,7 +1882,7 @@ MARGIN_MODE = "CROSS"
 
 ### Property 23: Risk Management Enforcement
 
-*For any* system state and new TradeAction: (a) if open positions count equals max_concurrent_positions, the action SHALL be queued; (b) if position size exceeds max_position_size_percent of balance, the action SHALL be rejected; (c) if accumulated daily losses reach daily_loss_limit_percent of balance, new positions SHALL be refused; (d) if required margin exceeds available balance, the action SHALL be skipped. In all cases, a WhatsApp alert SHALL be triggered.
+*For any* system state and new TradeAction: (a) if open positions count equals max_concurrent_positions, the action SHALL be queued; (b) if accumulated daily losses reach daily_loss_limit_percent of balance, new positions SHALL be refused; (c) if required margin exceeds available balance, the action SHALL be skipped. In all cases, a WhatsApp alert SHALL be triggered.
 
 **Validates: Requirements 9.1, 9.2, 9.3, 9.4, 9.5, 9.6**
 

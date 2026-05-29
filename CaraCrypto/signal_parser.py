@@ -43,26 +43,36 @@ class SignalParser:
         action_hint = self._infer_action_hint(context.current_message.text)
         return (
             "Kamu parser signal Caracrypto. Return JSON saja dengan field: "
-            "action, pair, direction, order_type, entry_price, take_profit_levels, stop_loss, risk_level, close_percentage. "
+            "action, pair, direction, order_type, entry_zone, entry_price, take_profit_levels, stop_loss, risk_level, close_percentage. "
             "Action valid: new_signal, update_sl, set_sl_breakeven, tp_partial, cancel, reverse, re_entry, cutloss, skip. "
             f"Message: {context.current_message.text}\n"
             f"Reply text: {context.current_message.reply_text}\n"
             f"History: {context.history}\n"
-            f"Running pairs: {context.position_state.running_pairs}\n"
+            f"Exchange state (Binance): {context.exchange_state}\n"
             f"Order hint: {order_hint}\n"
             f"Action hint: {action_hint}\n"
-            "Hint: NOW/entry NOW => market. antri/limit/kuning/tunggu kuning => limit. "
-            "Untuk image chart Caracrypto: garis/label kuning adalah area ENTRY; entry_price harus diambil dari label harga yang warnanya kuning. "
+            "Hint: market hanya jika ada perintah eksplisit seperti 'order now', 'open now', atau 'market order'. "
+            "Kata 'now' saja tanpa perintah eksplisit jangan dianggap market. "
+            "antri/limit/kuning/tunggu kuning => limit. "
+            "Untuk image chart Caracrypto: garis/label kuning adalah area ENTRY; isi entry_zone sebagai array [lower, upper] dari area entry kuning. "
             "Jangan ambil bid/ask box, current price, candle price, atau label harga non-kuning sebagai entry. "
             "Jika ada beberapa label/garis kuning, tentukan direction dulu: untuk SHORT gunakan level kuning paling atas/upper entry zone; untuk LONG gunakan level kuning paling bawah/lower entry zone. "
             "Garis/label merah biasanya STOP LOSS. Garis/label hijau biasanya TAKE PROFIT bertingkat. "
-            "Jika order_type=limit, entry_price wajib diisi dari level entry visual/teks; jangan null kecuali benar-benar tidak terlihat. "
+            "Jika entry_zone tidak bisa didapat, baru fallback ke entry_price tunggal. Jika order_type=limit, entry_zone/entry_price wajib diisi dari level entry visual/teks. "
+            "Gunakan Exchange state (Binance) untuk memahami pair yang benar-benar sedang open position / open order. "
             "Tag [OPEN]/[CLOSED] condong new_signal, [CANCEL] condong cancel."
         )
 
     def _infer_order_type_hint(self, text: str) -> str:
         t = (text or "").lower()
-        if "entry now" in t or "now" in t:
+        explicit_market_phrases = (
+            "order now",
+            "open now",
+            "entry now",
+            "market order",
+            "execute now",
+        )
+        if any(phrase in t for phrase in explicit_market_phrases):
             return "market"
         if any(k in t for k in ["antri", "limit", "kuning", "tunggu kuning"]):
             return "limit"
@@ -139,6 +149,7 @@ class SignalParser:
             direction = self._enum_from_payload(Direction, payload["direction"]) if payload.get("direction") else None
             order_type = self._enum_from_payload(OrderType, payload["order_type"]) if payload.get("order_type") else None
             entry_price = Decimal(str(payload["entry_price"])) if payload.get("entry_price") is not None else None
+            entry_zone = [Decimal(str(x)) for x in payload.get("entry_zone", [])] if payload.get("entry_zone") else None
             tp_levels = [Decimal(str(x)) for x in payload.get("take_profit_levels", [])] if payload.get("take_profit_levels") else None
             stop_loss = Decimal(str(payload["stop_loss"])) if payload.get("stop_loss") is not None else None
         except Exception:
@@ -154,6 +165,7 @@ class SignalParser:
             direction=direction,
             order_type=order_type,
             entry_price=entry_price,
+            entry_zone=entry_zone,
             take_profit_levels=tp_levels,
             stop_loss=stop_loss,
             risk_level=risk_level,
@@ -169,8 +181,7 @@ class SignalParser:
             f"message_id={context.current_message.message_id} "
             f"group={context.current_message.group_id} "
             f"images={len(images)} "
-            f"history={len(context.history)} "
-            f"running_pairs={context.position_state.running_pairs}"
+            f"history={len(context.history)}"
         )
         payload = await self._call_gemini(prompt, images)
         print(f"[SignalParser] Gemini parsed payload={payload}")

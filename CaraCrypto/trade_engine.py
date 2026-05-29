@@ -11,9 +11,10 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence as SequenceABC
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN
 from typing import Any, Optional, Sequence
 
 from .alert_service import AlertService
@@ -39,6 +40,9 @@ class TradeEngine:
         self.risk_config = risk_config
         self.price_watcher = None
         self._queued_actions = []
+        self._balance_max_attempts = 3
+        self._balance_retry_delay_sec = 1.0
+        self._symbol_filters: dict[str, dict[str, Decimal]] = {}
 
     async def _safe_alert(self, method: str, *args) -> None:
         fn = getattr(self.alert_service, method, None)
@@ -65,6 +69,85 @@ class TradeEngine:
                 if value is not None:
                     return str(value)
         return fallback
+
+    def _floor_to_step(self, value: Decimal, step: Decimal) -> Decimal:
+        if step <= 0:
+            return value
+        units = (value / step).to_integral_value(rounding=ROUND_DOWN)
+        normalized = units * step
+        return normalized.normalize()
+
+    def _extract_symbol_filters(self, payload: Any, pair: str) -> Optional[dict[str, Decimal]]:
+        symbols = None
+        if isinstance(payload, dict):
+            symbols = payload.get("symbols")
+        if not isinstance(symbols, SequenceABC) or isinstance(symbols, (str, bytes)):
+            return None
+        for symbol_info in symbols:
+            if not isinstance(symbol_info, dict):
+                continue
+            if symbol_info.get("symbol") != pair:
+                continue
+            filters = symbol_info.get("filters")
+            if not isinstance(filters, SequenceABC) or isinstance(filters, (str, bytes)):
+                continue
+            result: dict[str, Decimal] = {}
+            for item in filters:
+                if not isinstance(item, dict):
+                    continue
+                filter_type = item.get("filterType")
+                if filter_type == "PRICE_FILTER":
+                    tick_size = item.get("tickSize")
+                    if tick_size is not None:
+                        result["tick_size"] = Decimal(str(tick_size))
+                if filter_type in {"LOT_SIZE", "MARKET_LOT_SIZE"}:
+                    step_size = item.get("stepSize")
+                    if step_size is not None:
+                        result["step_size"] = Decimal(str(step_size))
+            if result:
+                return result
+        return None
+
+    def _get_exchange_info(self, pair: str) -> Optional[Any]:
+        methods = ("exchange_info", "futures_exchange_info", "get_exchange_info")
+        for method_name in methods:
+            fn = getattr(self.client, method_name, None)
+            if not callable(fn):
+                continue
+            try:
+                return fn(symbol=pair)
+            except TypeError:
+                try:
+                    return fn()
+                except Exception:
+                    continue
+            except Exception:
+                continue
+        return None
+
+    def _get_symbol_filters(self, pair: str) -> dict[str, Decimal]:
+        cached = self._symbol_filters.get(pair)
+        if cached is not None:
+            return cached
+        exchange_info = self._get_exchange_info(pair)
+        filters = self._extract_symbol_filters(exchange_info, pair) or {}
+        self._symbol_filters[pair] = filters
+        return filters
+
+    def _normalize_order_inputs(self, pair: str, qty: Decimal, price: Optional[Decimal] = None) -> tuple[Decimal, Optional[Decimal]]:
+        filters = self._get_symbol_filters(pair)
+        step_size = filters.get("step_size")
+        tick_size = filters.get("tick_size")
+        normalized_qty = self._floor_to_step(qty, step_size) if step_size is not None else qty
+        normalized_price = self._floor_to_step(price, tick_size) if (price is not None and tick_size is not None) else price
+        return normalized_qty, normalized_price
+
+    def _resolve_entry_from_zone(self, entry_zone: Optional[Sequence[Decimal]]) -> Optional[Decimal]:
+        if not entry_zone or len(entry_zone) < 2:
+            return None
+        low = min(entry_zone[0], entry_zone[1])
+        high = max(entry_zone[0], entry_zone[1])
+        return (low + high) / Decimal("2")
 
     async def _get_market_reference_price(self, pair: str) -> Optional[Decimal]:
         methods = (
@@ -124,9 +207,97 @@ class TradeEngine:
         except Exception:
             return leverage
 
-    def _calculate_position_size(self, entry_price: Decimal, leverage: int, risk_level: RiskLevel) -> Decimal:
-        # Placeholder balance 1000 USDT sampai endpoint account di-wire.
-        balance = Decimal("1000")
+    async def _get_account_balance(self) -> Optional[Decimal]:
+        """Ambil saldo USDT (availableBalance) dari Binance Futures USDT-M.
+
+        Mencoba sampai ``self._balance_max_attempts`` kali dengan backoff.
+        Mengembalikan ``None`` kalau semua percobaan gagal; caller wajib
+        memutuskan langkah lanjut (umumnya: skip eksekusi). Saat percobaan
+        terakhir gagal, error terakhir dikirim ke WhatsApp via
+        ``notify_error``.
+        """
+        candidates = (
+            "balance",
+            "futures_account_balance",
+            "account",
+            "futures_account",
+        )
+        last_error: Optional[str] = None
+        for attempt in range(1, self._balance_max_attempts + 1):
+            attempt_error: Optional[str] = None
+            tried_any = False
+            for method_name in candidates:
+                fn = getattr(self.client, method_name, None)
+                if not callable(fn):
+                    continue
+                tried_any = True
+                try:
+                    response = fn()
+                except TypeError:
+                    try:
+                        response = fn(asset="USDT")
+                    except Exception as exc:
+                        attempt_error = f"{method_name}: {exc}"
+                        continue
+                except Exception as exc:
+                    attempt_error = f"{method_name}: {exc}"
+                    continue
+                balance = self._extract_usdt_balance(response)
+                if balance is not None:
+                    return balance
+                attempt_error = f"{method_name}: USDT balance not found in response"
+            if not tried_any:
+                attempt_error = "binance client has no balance endpoint"
+            last_error = attempt_error or last_error or "unknown error fetching balance"
+            if attempt < self._balance_max_attempts:
+                await asyncio.sleep(self._balance_retry_delay_sec * attempt)
+        await self._safe_alert(
+            "notify_error",
+            "trade_engine_balance",
+            f"failed to fetch USDT balance after {self._balance_max_attempts} attempts: {last_error}",
+        )
+        return None
+
+    def _extract_usdt_balance(self, response: Any) -> Optional[Decimal]:
+        if response is None:
+            return None
+        if isinstance(response, dict):
+            for key in ("availableBalance", "balance", "walletBalance", "totalWalletBalance", "crossWalletBalance"):
+                if key in response:
+                    value = self._coerce_positive_decimal(response[key])
+                    if value is not None:
+                        return value
+            assets = response.get("assets")
+            if isinstance(assets, SequenceABC) and not isinstance(assets, (str, bytes)):
+                return self._extract_usdt_balance(list(assets))
+        elif isinstance(response, SequenceABC) and not isinstance(response, (str, bytes)):
+            for item in response:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("asset") != "USDT":
+                    continue
+                for key in ("availableBalance", "balance", "walletBalance", "crossWalletBalance"):
+                    if key in item:
+                        value = self._coerce_positive_decimal(item[key])
+                        if value is not None:
+                            return value
+        return None
+
+    @staticmethod
+    def _coerce_positive_decimal(value: Any) -> Optional[Decimal]:
+        if value is None:
+            return None
+        try:
+            decimal_value = Decimal(str(value))
+        except Exception:
+            return None
+        if decimal_value <= 0:
+            return None
+        return decimal_value
+
+    def _calculate_position_size(
+        self, entry_price: Decimal, leverage: int, risk_level: RiskLevel, balance: Decimal
+    ) -> Decimal:
         margin_pct = Decimal(str(self.risk_config.trade_margin_percent)) / Decimal("100")
         base_margin = balance * margin_pct
         if risk_level == RiskLevel.HIGH:
@@ -134,16 +305,117 @@ class TradeEngine:
         qty = (base_margin * Decimal(leverage)) / entry_price
         return max(qty, Decimal("0"))
 
-    async def _check_risk_limits(self, pair: str, entry_price: Decimal, risk_level: RiskLevel, leverage: int) -> bool:
-        account_balance = Decimal("1000")
+    def _extract_running_pairs_from_payload(self, payload: Any) -> set[str]:
+        positions: list[dict[str, Any]] = []
+        if isinstance(payload, dict):
+            candidate = payload.get("positions")
+            if isinstance(candidate, SequenceABC) and not isinstance(candidate, (str, bytes)):
+                positions = [p for p in candidate if isinstance(p, dict)]
+            elif "symbol" in payload and ("positionAmt" in payload or "position_amount" in payload):
+                positions = [payload]
+        elif isinstance(payload, SequenceABC) and not isinstance(payload, (str, bytes)):
+            positions = [p for p in payload if isinstance(p, dict)]
+        running_pairs: set[str] = set()
+        for pos in positions:
+            symbol = self._normalize_pair(pos.get("symbol"))
+            if not symbol:
+                continue
+            raw_amt = pos.get("positionAmt", pos.get("position_amount", pos.get("qty")))
+            try:
+                amt = Decimal(str(raw_amt))
+            except Exception:
+                continue
+            if amt.copy_abs() > 0:
+                running_pairs.add(symbol)
+        return running_pairs
+
+    def _get_binance_running_pairs(self) -> Optional[set[str]]:
+        methods = (
+            "position_risk",
+            "futures_position_information",
+            "futures_account",
+            "account",
+        )
+        last_error: Optional[str] = None
+        for method_name in methods:
+            fn = getattr(self.client, method_name, None)
+            if not callable(fn):
+                continue
+            try:
+                payload = fn()
+            except TypeError:
+                try:
+                    payload = fn(recvWindow=5000)
+                except Exception as exc:
+                    last_error = f"{method_name}: {exc}"
+                    continue
+            except Exception as exc:
+                last_error = f"{method_name}: {exc}"
+                continue
+            return self._extract_running_pairs_from_payload(payload)
+        if last_error:
+            return None
+        return set()
+
+    def _get_binance_open_order_pairs(self) -> Optional[set[str]]:
+        methods = (
+            "get_orders",
+            "futures_get_open_orders",
+            "get_open_orders",
+        )
+        last_error: Optional[str] = None
+        for method_name in methods:
+            fn = getattr(self.client, method_name, None)
+            if not callable(fn):
+                continue
+            try:
+                payload = fn()
+            except TypeError:
+                try:
+                    payload = fn(recvWindow=5000)
+                except Exception as exc:
+                    last_error = f"{method_name}: {exc}"
+                    continue
+            except Exception as exc:
+                last_error = f"{method_name}: {exc}"
+                continue
+            if not isinstance(payload, SequenceABC) or isinstance(payload, (str, bytes)):
+                return set()
+            pairs: set[str] = set()
+            for item in payload:
+                if not isinstance(item, dict):
+                    continue
+                symbol = self._normalize_pair(item.get("symbol"))
+                if symbol:
+                    pairs.add(symbol)
+            return pairs
+        if last_error:
+            return None
+        return set()
+
+    def get_exchange_context_state(self) -> dict[str, Any]:
+        running_pairs = self._get_binance_running_pairs()
+        open_order_pairs = self._get_binance_open_order_pairs()
+        return {
+            "running_pairs": sorted(running_pairs) if running_pairs is not None else None,
+            "open_order_pairs": sorted(open_order_pairs) if open_order_pairs is not None else None,
+        }
+
+    async def _check_risk_limits(
+        self,
+        pair: str,
+        entry_price: Decimal,
+        risk_level: RiskLevel,
+        leverage: int,
+        account_balance: Optional[Decimal] = None,
+    ) -> bool:
+        if account_balance is None:
+            account_balance = await self._get_account_balance()
+            if account_balance is None:
+                return False
         margin = account_balance * Decimal(str(self.risk_config.trade_margin_percent)) / Decimal("100")
         if risk_level == RiskLevel.HIGH:
             margin *= Decimal(str(self.risk_config.high_risk_multiplier))
-        position_notional = margin * Decimal(leverage)
-        max_position_notional = account_balance * Decimal(str(self.risk_config.max_position_size_percent)) / Decimal("100")
-        if position_notional > max_position_notional:
-            await self._safe_alert("notify_risk_limit", "position size exceeds max_position_size_percent")
-            return False
 
         day_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         daily_loss = await self.db.get_daily_loss(day_start)
@@ -156,9 +428,15 @@ class TradeEngine:
             await self._safe_alert("notify_risk_limit", "insufficient balance for required margin")
             return False
 
-        if pair and self.position_manager.has_position(pair):
+        running_pairs = self._get_binance_running_pairs()
+        if running_pairs is None:
+            await self._safe_alert("notify_error", "trade_engine_risk", "cannot verify running positions from Binance API")
             return False
-        if len(self.position_manager.get_running_pairs()) >= self.risk_config.max_concurrent_positions:
+
+        if pair and pair in running_pairs:
+            await self._safe_alert("notify_risk_limit", f"pair already running: {pair}")
+            return False
+        if len(running_pairs) >= self.risk_config.max_concurrent_positions:
             await self._safe_alert("notify_risk_limit", "max concurrent positions reached")
             self._queued_actions.append({"pair": pair, "queued_at": datetime.now(timezone.utc).isoformat()})
             return False
@@ -168,7 +446,8 @@ class TradeEngine:
         side = "BUY" if action.direction == Direction.LONG else "SELL"
         fallback = f"market-{action.pair}-{int(datetime.now(timezone.utc).timestamp())}"
         if action.pair:
-            response = self._create_futures_order(symbol=action.pair, side=side, type="MARKET", quantity=str(qty))
+            normalized_qty, _ = self._normalize_order_inputs(action.pair, qty)
+            response = self._create_futures_order(symbol=action.pair, side=side, type="MARKET", quantity=str(normalized_qty))
             return self._extract_order_id(response, fallback)
         return fallback
 
@@ -176,12 +455,13 @@ class TradeEngine:
         side = "BUY" if action.direction == Direction.LONG else "SELL"
         fallback = f"limit-{action.pair}-{int(datetime.now(timezone.utc).timestamp())}"
         if action.pair and action.entry_price is not None:
+            normalized_qty, normalized_price = self._normalize_order_inputs(action.pair, qty, action.entry_price)
             response = self._create_futures_order(
                 symbol=action.pair,
                 side=side,
                 type="LIMIT",
-                quantity=str(qty),
-                price=str(action.entry_price),
+                quantity=str(normalized_qty),
+                price=str(normalized_price if normalized_price is not None else action.entry_price),
                 timeInForce="GTC",
             )
             return self._extract_order_id(response, fallback)
@@ -222,6 +502,10 @@ class TradeEngine:
             await self._safe_alert("notify_error", "trade_engine_new_signal", "empty pair after normalization")
             return False
         order_type = action.order_type or OrderType.MARKET
+        entry_raw = self._resolve_entry_from_zone(action.entry_zone)
+        if entry_raw is not None:
+            _, normalized_entry = self._normalize_order_inputs(action.pair, Decimal("1"), entry_raw)
+            action.entry_price = normalized_entry if normalized_entry is not None else entry_raw
         if action.entry_price is None:
             if order_type == OrderType.MARKET:
                 action.entry_price = await self._get_market_reference_price(action.pair)
@@ -229,18 +513,23 @@ class TradeEngine:
                 await self._safe_alert(
                     "notify_error",
                     "trade_engine_new_signal",
-                    f"missing entry_price for {order_type.value} order pair={action.pair}",
+                    f"missing entry_price/entry_zone for {order_type.value} order pair={action.pair}",
                 )
                 return False
         leverage = self.get_leverage(action.pair)
-        if not await self._check_risk_limits(action.pair, action.entry_price, action.risk_level, leverage):
+        account_balance = await self._get_account_balance()
+        if account_balance is None:
+            return False
+        if not await self._check_risk_limits(
+            action.pair, action.entry_price, action.risk_level, leverage, account_balance
+        ):
             return False
         await self._set_margin_mode_cross(action.pair)
         leverage = await self._set_leverage(action.pair, leverage)
-        qty = self._calculate_position_size(action.entry_price, leverage, action.risk_level)
+        qty = self._calculate_position_size(action.entry_price, leverage, action.risk_level, account_balance)
         if qty <= 0:
             return False
-        margin_used = Decimal("1000") * Decimal(str(self.risk_config.trade_margin_percent)) / Decimal("100")
+        margin_used = account_balance * Decimal(str(self.risk_config.trade_margin_percent)) / Decimal("100")
         if action.risk_level == RiskLevel.HIGH:
             margin_used *= Decimal(str(self.risk_config.high_risk_multiplier))
         order_id = ""
@@ -275,20 +564,29 @@ class TradeEngine:
         else:
             await self._safe_alert("notify_order_filled", action.pair, order_type.value, str(action.entry_price))
             await self._set_tp_sl_orders(pos)
-        await self._safe_alert("notify_new_order", action.pair, action.direction.value, str(action.entry_price), order_type.value)
         final_tp = self._get_final_tp_level(pos.direction, pos.tp_levels) if pos.tp_levels else None
+        detail_qty, detail_entry = self._normalize_order_inputs(
+            action.pair,
+            qty,
+            action.entry_price if order_type == OrderType.LIMIT else None,
+        )
+        _, detail_sl = self._normalize_order_inputs(action.pair, Decimal("1"), pos.current_sl) if pos.current_sl is not None else (Decimal("1"), None)
+        _, detail_tp = self._normalize_order_inputs(action.pair, Decimal("1"), final_tp) if final_tp is not None else (Decimal("1"), None)
         await self._safe_alert(
             "notify_new_order_detail",
             action.pair,
             action.direction.value,
             order_type.value,
-            str(action.entry_price),
-            str(qty),
+            str(detail_entry if detail_entry is not None else action.entry_price),
+            str(detail_qty),
             leverage,
             f"{margin_used:.2f}",
-            str(pos.current_sl) if pos.current_sl is not None else None,
-            str(final_tp) if final_tp is not None else None,
+            str(detail_sl) if detail_sl is not None else None,
+            str(detail_tp) if detail_tp is not None else None,
             action.action.value,
+            str([str(x) for x in action.entry_zone]) if action.entry_zone else None,
+            str(entry_raw) if entry_raw is not None else None,
+            str(detail_entry if detail_entry is not None else action.entry_price),
         )
         return True
 
@@ -344,12 +642,26 @@ class TradeEngine:
 
     async def _place_take_profit_market_order(self, pair: str, direction: Direction, tp_price: Decimal) -> None:
         side = "SELL" if direction == Direction.LONG else "BUY"
-        self._create_futures_order(symbol=pair, side=side, type="TAKE_PROFIT_MARKET", stopPrice=str(tp_price), closePosition="true")
+        _, normalized_price = self._normalize_order_inputs(pair, Decimal("1"), tp_price)
+        self._create_futures_order(
+            symbol=pair,
+            side=side,
+            type="TAKE_PROFIT_MARKET",
+            stopPrice=str(normalized_price if normalized_price is not None else tp_price),
+            closePosition="true",
+        )
         await self._safe_alert("notify_modification", pair, "set_tp", f"final_tp={tp_price}")
 
     async def _place_stop_market_order(self, pair: str, direction: Direction, sl_price: Decimal) -> None:
         side = "SELL" if direction == Direction.LONG else "BUY"
-        self._create_futures_order(symbol=pair, side=side, type="STOP_MARKET", stopPrice=str(sl_price), closePosition="true")
+        _, normalized_price = self._normalize_order_inputs(pair, Decimal("1"), sl_price)
+        self._create_futures_order(
+            symbol=pair,
+            side=side,
+            type="STOP_MARKET",
+            stopPrice=str(normalized_price if normalized_price is not None else sl_price),
+            closePosition="true",
+        )
         await self._safe_alert("notify_modification", pair, "set_sl", f"sl={sl_price}")
 
     async def _handle_update_sl(self, action: TradeAction, message_db_id: Optional[int]) -> None:

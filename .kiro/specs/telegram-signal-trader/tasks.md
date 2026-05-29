@@ -153,7 +153,7 @@ Implementation language: Python (asyncio-native)
     - Implement `_set_margin_mode_cross()` — always CROSS margin
     - Implement `_set_leverage()` — set leverage for pair
     - Implement `_calculate_position_size()` — full size for normal, half for high_risk
-    - Implement `_check_risk_limits()` — max concurrent positions, max position size, daily loss limit, balance check
+    - Implement `_check_risk_limits()` — max concurrent positions, daily loss limit, balance check
     - _Requirements: 5.3, 5.4, 5.23, 5.24, 6.1, 6.2, 6.3, 9.1, 9.2, 9.3, 9.4, 9.5, 9.6_
 
   - [x] 11.2 Implement new_signal handler (market + limit order flows)
@@ -256,7 +256,6 @@ Implementation language: Python (asyncio-native)
   - [x] 15.1 Implement risk management checks in TradeEngine
     - Implement `_check_risk_limits()` fully:
       - Check max concurrent positions (configurable)
-      - Check max position size percent of balance
       - Check daily loss limit percent of balance
       - Check sufficient account balance
     - Queue new trades when max positions reached + send alert
@@ -265,7 +264,7 @@ Implementation language: Python (asyncio-native)
     - _Requirements: 9.1, 9.2, 9.3, 9.4, 9.5, 9.6_
 
   - [x]* 15.2 Write property tests for risk management
-    - **Property 23: Risk Management Enforcement** — max positions → queue, max size → reject, daily loss → refuse, insufficient balance → skip; all trigger alerts
+    - **Property 23: Risk Management Enforcement** — max positions → queue, daily loss → refuse, insufficient balance → skip; all trigger alerts
     - **Validates: Requirements 9.1, 9.2, 9.3, 9.4, 9.5, 9.6**
 
 - [x] 16. Final checkpoint - Ensure all tests pass

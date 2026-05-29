@@ -13,7 +13,10 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import pathlib
 import traceback
+
+from dotenv import load_dotenv
 
 try:
     from binance.um_futures import UMFutures
@@ -30,6 +33,26 @@ from .price_watcher import PriceWatcher
 from .signal_listener import SignalListener
 from .signal_parser import SignalParser
 from .trade_engine import TradeEngine
+
+
+def _bootstrap_env() -> None:
+    """Muat `.env` dari working dir maupun root repo sebelum load_config().
+
+    Aman dipanggil berkali-kali. Default env-nya tidak ditimpa kalau sudah
+    di-set oleh harness (mis. docker-compose).
+    """
+    candidates = []
+    cwd_env = pathlib.Path.cwd() / ".env"
+    repo_env = pathlib.Path(__file__).resolve().parent.parent / ".env"
+    if cwd_env.exists():
+        candidates.append(cwd_env)
+    if repo_env != cwd_env and repo_env.exists():
+        candidates.append(repo_env)
+    if not candidates:
+        load_dotenv()
+        return
+    for path in candidates:
+        load_dotenv(path, override=False)
 
 
 async def _process_signals(queue, db, context_builder, parser, engine, watcher):
@@ -64,6 +87,7 @@ async def _process_one_signal(raw, db, context_builder, parser, engine, watcher)
     )
     await db.populate_reply_data(message_db_id, raw.group_id, raw.reply_to_message_id)
     context = await context_builder.build_context(raw)
+    context.exchange_state = engine.get_exchange_context_state()
     if isinstance(context, dict):
         action = await parser.parse_and_classify(context, message_db_id)
         if not action or action.action == GeminiAction.SKIP:
@@ -85,8 +109,8 @@ async def _process_one_signal(raw, db, context_builder, parser, engine, watcher)
         f"group={raw.group_id} topic={raw.topic_id} "
         f"reply_to={raw.reply_to_message_id} "
         f"message='{text_preview}' "
-        f"running_trades={state.running_pairs} "
-        f"allowed_running={state.allowed_running} "
+        f"binance_running={context.exchange_state.get('running_pairs')} "
+        f"binance_open_orders={context.exchange_state.get('open_order_pairs')} "
         f"closed_today={state.closed_today} "
         f"history_count={len(context.history)}"
     )
@@ -103,6 +127,7 @@ async def _process_one_signal(raw, db, context_builder, parser, engine, watcher)
 
 async def main() -> None:
     print("[Main] Starting CaraCrypto Trader...")
+    _bootstrap_env()
     cfg = load_config()
     db = Database(cfg.database.url)
     await db.connect()
@@ -117,9 +142,27 @@ async def main() -> None:
     parser = SignalParser(cfg.gemini, db)
     params = set(inspect.signature(UMFutures.__init__).parameters.keys())
     if {"key", "secret"}.issubset(params):
-        binance = UMFutures(key=cfg.binance.api_key, secret=cfg.binance.api_secret)
+        binance = UMFutures(
+            key=cfg.binance.api_key,
+            secret=cfg.binance.api_secret,
+            base_url=cfg.binance.futures_base_url,
+        )
     else:
-        binance = UMFutures(api_key=cfg.binance.api_key, api_secret=cfg.binance.api_secret)
+        client_kwargs = {
+            "api_key": cfg.binance.api_key,
+            "api_secret": cfg.binance.api_secret,
+        }
+        if "testnet" in params and cfg.binance.env == "testnet":
+            client_kwargs["testnet"] = True
+        if "demo" in params and cfg.binance.env == "demo":
+            client_kwargs["demo"] = True
+        binance = UMFutures(**client_kwargs)
+        # Tetap override URL untuk kompatibilitas versi python-binance lama
+        # yang belum kenal kwargs `testnet`/`demo`.
+        if cfg.binance.env != "mainnet":
+            binance.FUTURES_URL = f"{cfg.binance.futures_base_url}/fapi"
+            binance.FUTURES_DATA_URL = f"{cfg.binance.futures_base_url}/futures/data"
+    print(f"[Main] Binance env={cfg.binance.env} base={cfg.binance.futures_base_url}")
     engine = TradeEngine(binance, db, alert_service, position_manager, cfg.risk)
     watcher = PriceWatcher(alert_service, position_manager)
     watcher.trade_engine = engine

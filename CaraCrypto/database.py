@@ -15,12 +15,10 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, select
+from sqlalchemy import BigInteger, DateTime, ForeignKey, String, Text, UniqueConstraint, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-
-from .models import Direction, RunningPosition
 
 
 class Base(DeclarativeBase):
@@ -43,22 +41,6 @@ class MessageModel(Base):
     gemini_action: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     processed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-
-
-class RunningPositionModel(Base):
-    __tablename__ = "running_positions"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    pair: Mapped[str] = mapped_column(String(32), unique=True)
-    direction: Mapped[str] = mapped_column(String(16))
-    entry_price: Mapped[Decimal] = mapped_column(Numeric(30, 10))
-    current_sl: Mapped[Optional[Decimal]] = mapped_column(Numeric(30, 10), nullable=True)
-    tp_levels: Mapped[Optional[List[Any]]] = mapped_column(JSONB, nullable=True)
-    leverage: Mapped[int] = mapped_column(Integer)
-    order_id: Mapped[str] = mapped_column(String(128))
-    quantity: Mapped[Decimal] = mapped_column(Numeric(30, 10))
-    message_id: Mapped[Optional[int]] = mapped_column(ForeignKey("messages.id"), nullable=True)
-    opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class ModificationLogModel(Base):
@@ -152,60 +134,6 @@ class Database:
                 }
                 for r in rows
             ]
-
-    async def get_running_positions(self) -> List[RunningPosition]:
-        async with self.session_factory() as session:
-            rows = (await session.execute(select(RunningPositionModel))).scalars().all()
-            result: List[RunningPosition] = []
-            for r in rows:
-                result.append(
-                    RunningPosition(
-                        pair=r.pair,
-                        direction=Direction(r.direction),
-                        entry_price=Decimal(r.entry_price),
-                        current_sl=Decimal(r.current_sl) if r.current_sl is not None else None,
-                        tp_levels=[Decimal(str(x)) for x in (r.tp_levels or [])],
-                        leverage=r.leverage,
-                        order_id=r.order_id,
-                        quantity=Decimal(r.quantity),
-                        opened_at=r.opened_at,
-                        message_db_id=r.message_id,
-                    )
-                )
-            return result
-
-    async def store_position(self, position: RunningPosition) -> None:
-        async with self.session_factory() as session:
-            row = RunningPositionModel(
-                pair=position.pair,
-                direction=position.direction.value,
-                entry_price=position.entry_price,
-                current_sl=position.current_sl,
-                tp_levels=[str(x) for x in position.tp_levels],
-                leverage=position.leverage,
-                order_id=position.order_id,
-                quantity=position.quantity,
-                message_id=position.message_db_id,
-                opened_at=position.opened_at,
-            )
-            session.add(row)
-            await session.commit()
-
-    async def remove_position(self, pair: str) -> None:
-        async with self.session_factory() as session:
-            row = (await session.execute(select(RunningPositionModel).where(RunningPositionModel.pair == pair))).scalars().first()
-            if row:
-                await session.delete(row)
-                await session.commit()
-
-    async def update_order_execution(self, pair: str, order_id: str, quantity: Decimal) -> None:
-        async with self.session_factory() as session:
-            row = (await session.execute(select(RunningPositionModel).where(RunningPositionModel.pair == pair))).scalars().first()
-            if not row:
-                return
-            row.order_id = order_id
-            row.quantity = quantity
-            await session.commit()
 
     async def get_daily_loss(self, day_start: datetime) -> Decimal:
         async with self.session_factory() as session:

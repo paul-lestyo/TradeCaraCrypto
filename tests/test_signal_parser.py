@@ -72,6 +72,7 @@ def test_uppercase_payload_enum_normalization_property():
             "pair": "JELLY/USDT",
             "direction": "LONG",
             "order_type": "LIMIT",
+            "entry_zone": ["0.0122", "0.0124"],
             "entry_price": "0.0123",
             "risk_level": "NORMAL",
         }
@@ -81,6 +82,7 @@ def test_uppercase_payload_enum_normalization_property():
     assert action.pair == "JELLYUSDT"
     assert action.direction == Direction.LONG
     assert action.order_type == OrderType.LIMIT
+    assert action.entry_zone == [Decimal("0.0122"), Decimal("0.0124")]
     assert action.entry_price == Decimal("0.0123")
 
 
@@ -89,14 +91,14 @@ def test_prompt_declares_yellow_level_as_entry_property():
     context = MessageContext(
         current_message=RawSignalMessage(text="[OPEN] PROM", group_id=-1, message_id=1),
         history=[],
-        position_state=PositionState(running_positions=[], running_pairs=[], closed_today=[], allowed_running=[]),
+        position_state=PositionState(closed_today=[]),
     )
     prompt = p._build_prompt(context)
     assert "garis/label kuning adalah area ENTRY" in prompt
     assert "Jangan ambil bid/ask box, current price" in prompt
     assert "untuk SHORT gunakan level kuning paling atas" in prompt
     assert "untuk LONG gunakan level kuning paling bawah" in prompt
-    assert "entry_price wajib diisi" in prompt
+    assert "isi entry_zone sebagai array [lower, upper]" in prompt
 
 
 def test_gemini_content_includes_image_parts_property():

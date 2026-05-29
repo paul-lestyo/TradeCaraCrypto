@@ -72,6 +72,7 @@ class TradeAction:
     direction: Optional[Direction] = None
     order_type: Optional[OrderType] = None
     entry_price: Optional[Decimal] = None
+    entry_zone: Optional[List[Decimal]] = None
     take_profit_levels: Optional[List[Decimal]] = None
     stop_loss: Optional[Decimal] = None
     risk_level: RiskLevel = RiskLevel.NORMAL
@@ -95,10 +96,7 @@ class RunningPosition:
 
 @dataclass
 class PositionState:
-    running_positions: List[RunningPosition]
-    running_pairs: List[str]
     closed_today: List[str]
-    allowed_running: List[str]
 
 
 @dataclass
@@ -106,6 +104,7 @@ class MessageContext:
     current_message: RawSignalMessage
     history: List[Dict[str, Any]]
     position_state: PositionState
+    exchange_state: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

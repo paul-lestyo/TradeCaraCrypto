@@ -31,6 +31,9 @@ class _Alert:
     async def send_alert(self, msg):
         self.sent.append(msg)
 
+    async def notify_closed(self, pair, reason):
+        self.sent.append(f"closed:{pair}:{reason}")
+
 
 class _PM:
     def __init__(self, pos):
@@ -52,6 +55,12 @@ class _TE:
 
     async def _set_tp_sl_orders(self, _):
         self.called += 1
+
+    def _get_open_orders(self, _pair):
+        return []
+
+    def _get_binance_running_pairs(self):
+        return set()
 
 
 @pytest.mark.asyncio
@@ -83,3 +92,18 @@ def test_tp_sl_direction_detection_property():
     assert w._check_tp_level_reached(Direction.SHORT, Decimal("99"), Decimal("100"))
     assert w._check_sl_reached(Direction.LONG, Decimal("99"), Decimal("100"))
     assert w._check_sl_reached(Direction.SHORT, Decimal("101"), Decimal("100"))
+
+
+@pytest.mark.asyncio
+async def test_pending_limit_missing_on_exchange_assumed_canceled_property():
+    pos = RunningPosition("BTCUSDT", Direction.LONG, Decimal("100"), Decimal("95"), [Decimal("110")], 50, "1", Decimal("0.1"), datetime.utcnow())
+    alert = _Alert()
+    pm = _PM(pos)
+    w = PriceWatcher(alert, pm)
+    te = _TE()
+    w.trade_engine = te
+    await w.subscribe("BTCUSDT")
+    w.register_pending_order("oid-cancel", TradeAction(action=GeminiAction.NEW_SIGNAL, pair="BTCUSDT"))
+    await w._reconcile_pending_limit_orders()
+    assert "BTCUSDT" in pm.removed
+    assert "closed:BTCUSDT:cancel" in alert.sent

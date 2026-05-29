@@ -24,7 +24,7 @@ class _DB:
 
 class _PM:
     def get_context_state(self):
-        return PositionState(running_positions=[], running_pairs=["BTCUSDT"], closed_today=[], allowed_running=[])
+        return PositionState(closed_today=[])
 
 
 @pytest.mark.asyncio
@@ -35,4 +35,4 @@ async def test_message_context_payload_completeness_property():
     assert isinstance(ctx, MessageContext)
     assert ctx.current_message.message_id == 99
     assert len(ctx.history) <= 10
-    assert ctx.position_state.running_pairs == ["BTCUSDT"]
+    assert ctx.position_state.closed_today == []

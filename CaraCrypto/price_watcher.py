@@ -40,6 +40,7 @@ class PriceWatcher:
         asyncio.create_task(self._start_user_data_stream())
         while self._running:
             await self._watch_price()
+            await self._reconcile_pending_limit_orders()
             await asyncio.sleep(1)
 
     async def stop(self) -> None:
@@ -49,24 +50,7 @@ class PriceWatcher:
     async def subscribe(self, pair: str, action: TradeAction | None = None) -> None:
         self._subscriptions.add(pair)
         print(f"[PriceWatcher] subscribe pair={pair} active={sorted(self._subscriptions)}")
-        if action:
-            await self._safe_alert(
-                "send_alert",
-                "WATCHER START\n"
-                f"pair={pair}\n"
-                f"action={action.action.value}\n"
-                f"side={action.direction.value if action.direction else None}\n"
-                f"type={action.order_type.value if action.order_type else None}\n"
-                f"entry={action.entry_price}\n"
-                f"sl={action.stop_loss}\n"
-                f"tp={action.take_profit_levels}\n"
-                f"risk={action.risk_level.value}",
-            )
-        else:
-            await self._safe_alert(
-                "send_alert",
-                f"WATCHER START\npair={pair}\nactive={sorted(self._subscriptions)}",
-            )
+        _ = action
 
     async def unsubscribe(self, pair: str) -> None:
         self._subscriptions.discard(pair)
@@ -91,6 +75,44 @@ class PriceWatcher:
                     await self.alert_service.notify_tp_hit(pair, str(tp))
             if pos.current_sl is not None and self._check_sl_reached(pos.direction, current_price, pos.current_sl):
                 await self.alert_service.notify_sl_hit(pair, str(pos.current_sl))
+
+    async def _reconcile_pending_limit_orders(self) -> None:
+        if not self._pending_limit_orders or not self.trade_engine:
+            return
+        running_pairs = None
+        if hasattr(self.trade_engine, "_get_binance_running_pairs"):
+            try:
+                running_pairs = self.trade_engine._get_binance_running_pairs()
+            except Exception:
+                running_pairs = None
+        open_order_ids_by_pair: dict[str, set[str]] = {}
+        for order_id, action in list(self._pending_limit_orders.items()):
+            pair = action.pair or ""
+            if not pair:
+                self._pending_limit_orders.pop(order_id, None)
+                continue
+            if pair not in open_order_ids_by_pair:
+                open_order_ids: set[str] = set()
+                try:
+                    open_orders = self.trade_engine._get_open_orders(pair)
+                    for order in open_orders:
+                        oid = order.get("orderId")
+                        if oid is not None:
+                            open_order_ids.add(str(oid))
+                except Exception:
+                    continue
+                open_order_ids_by_pair[pair] = open_order_ids
+            if str(order_id) in open_order_ids_by_pair[pair]:
+                continue
+            if running_pairs is not None and pair in running_pairs:
+                await self._handle_order_update(str(order_id), "LIMIT", "FILLED", pair)
+                continue
+            print(f"[PriceWatcher] pending order missing on exchange -> assume canceled pair={pair} order_id={order_id}")
+            self._pending_limit_orders.pop(order_id, None)
+            if self.position_manager.get_position(pair):
+                await self.position_manager.remove_position(pair)
+            await self.unsubscribe(pair)
+            await self._safe_alert("notify_closed", pair, "cancel")
 
     def _check_tp_level_reached(self, direction: Direction, price: Decimal, tp_level: Decimal) -> bool:
         if direction == Direction.LONG:

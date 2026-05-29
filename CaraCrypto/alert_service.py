@@ -64,6 +64,9 @@ class AlertService:
         stop_loss: Optional[str],
         take_profit: Optional[str],
         reason: str,
+        entry_zone: Optional[str] = None,
+        entry_raw: Optional[str] = None,
+        entry_final: Optional[str] = None,
     ) -> None:
         await self.send_alert(
             "ORDER DETAIL\n"
@@ -71,6 +74,9 @@ class AlertService:
             f"side={direction}\n"
             f"type={order_type}\n"
             f"entry={entry_price}\n"
+            f"entry_zone={entry_zone if entry_zone is not None else '-'}\n"
+            f"entry_raw={entry_raw if entry_raw is not None else '-'}\n"
+            f"entry_final={entry_final if entry_final is not None else entry_price}\n"
             f"qty={quantity}\n"
             f"lev={leverage}x\n"
             f"margin_used~${margin_used_usd}\n"

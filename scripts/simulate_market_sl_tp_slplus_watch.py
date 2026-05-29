@@ -246,7 +246,6 @@ async def main():
         trade_margin_percent=1.0,
         high_risk_multiplier=0.5,
         max_concurrent_positions=5,
-        max_position_size_percent=200.0,
         daily_loss_limit_percent=5.0,
     )
     engine = TradeEngine(client, db, alert, pm, risk)

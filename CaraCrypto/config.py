@@ -19,6 +19,17 @@ LEVERAGE_MAP: Dict[str, int] = {"BTCUSDT": 125, "ETHUSDT": 100}
 DEFAULT_LEVERAGE: int = 50
 MARGIN_MODE: str = "CROSS"
 
+# Endpoint host Binance Futures USDT-M per environment.
+# - mainnet  : production (perlu key live + Futures permission + IP whitelist).
+# - testnet  : Binance Futures Testnet (`testnet.binancefuture.com`).
+# - demo     : Binance Futures "Demo Trading" (`demo-fapi.binance.com`).
+BINANCE_FUTURES_HOSTS: Dict[str, str] = {
+    "mainnet": "https://fapi.binance.com",
+    "testnet": "https://testnet.binancefuture.com",
+    "demo": "https://demo-fapi.binance.com",
+}
+BINANCE_ENV_DEFAULT: str = "mainnet"
+
 TELEGRAM_GROUPS = [-1002647537685, -1003629502181]
 TELEGRAM_FORUM_TOPICS = {
     -1002647537685: [4],
@@ -45,6 +56,11 @@ class GeminiConfig:
 class BinanceConfig:
     api_key: str
     api_secret: str
+    env: str = BINANCE_ENV_DEFAULT
+
+    @property
+    def futures_base_url(self) -> str:
+        return BINANCE_FUTURES_HOSTS.get(self.env, BINANCE_FUTURES_HOSTS[BINANCE_ENV_DEFAULT])
 
 
 @dataclass
@@ -62,7 +78,6 @@ class AlertConfig:
 @dataclass
 class RiskConfig:
     max_concurrent_positions: int = 5
-    max_position_size_percent: float = 10.0
     daily_loss_limit_percent: float = 5.0
     high_risk_multiplier: float = 0.5
     trade_margin_percent: float = 1.0
@@ -101,6 +116,7 @@ def load_config() -> AppConfig:
         binance=BinanceConfig(
             api_key=os.getenv("BINANCE_API_KEY", ""),
             api_secret=os.getenv("BINANCE_API_SECRET", ""),
+            env=(os.getenv("BINANCE_ENV") or BINANCE_ENV_DEFAULT).strip().lower(),
         ),
         database=DatabaseConfig(
             url=os.getenv(
@@ -114,7 +130,6 @@ def load_config() -> AppConfig:
         ),
         risk=RiskConfig(
             max_concurrent_positions=int(os.getenv("MAX_CONCURRENT_POSITIONS", "5")),
-            max_position_size_percent=float(os.getenv("MAX_POSITION_SIZE_PERCENT", "10")),
             daily_loss_limit_percent=float(os.getenv("DAILY_LOSS_LIMIT_PERCENT", "5")),
             high_risk_multiplier=float(os.getenv("HIGH_RISK_MULTIPLIER", "0.5")),
             trade_margin_percent=float(os.getenv("TRADE_MARGIN_PERCENT", "1")),
