@@ -77,8 +77,15 @@ class TradeEngine:
         if step <= 0:
             return value
         units = (value / step).to_integral_value(rounding=ROUND_DOWN)
-        normalized = units * step
-        return normalized.normalize()
+        return units * step
+
+    @staticmethod
+    def _decimal_to_str(value: Decimal) -> str:
+        # Hindari scientific notation saat kirim ke Binance / assert test.
+        text = format(value, "f")
+        if "." in text:
+            text = text.rstrip("0").rstrip(".")
+        return text or "0"
 
     def _extract_symbol_filters(self, payload: Any, pair: str) -> Optional[dict[str, Decimal]]:
         symbols = None
@@ -456,7 +463,12 @@ class TradeEngine:
         fallback = f"market-{action.pair}-{int(datetime.now(timezone.utc).timestamp())}"
         if action.pair:
             normalized_qty, _ = self._normalize_order_inputs(action.pair, qty)
-            response = self._create_futures_order(symbol=action.pair, side=side, type="MARKET", quantity=str(normalized_qty))
+            response = self._create_futures_order(
+                symbol=action.pair,
+                side=side,
+                type="MARKET",
+                quantity=self._decimal_to_str(normalized_qty),
+            )
             return self._extract_order_id(response, fallback)
         return fallback
 
@@ -469,8 +481,8 @@ class TradeEngine:
                 symbol=action.pair,
                 side=side,
                 type="LIMIT",
-                quantity=str(normalized_qty),
-                price=str(normalized_price if normalized_price is not None else action.entry_price),
+                quantity=self._decimal_to_str(normalized_qty),
+                price=self._decimal_to_str(normalized_price if normalized_price is not None else action.entry_price),
                 timeInForce="GTC",
             )
             return self._extract_order_id(response, fallback)
@@ -656,7 +668,7 @@ class TradeEngine:
             symbol=pair,
             side=side,
             type="TAKE_PROFIT_MARKET",
-            stopPrice=str(normalized_price if normalized_price is not None else tp_price),
+            stopPrice=self._decimal_to_str(normalized_price if normalized_price is not None else tp_price),
             closePosition="true",
         )
         await self._safe_alert("notify_modification", pair, "set_tp", f"final_tp={tp_price}")
@@ -668,7 +680,7 @@ class TradeEngine:
             symbol=pair,
             side=side,
             type="STOP_MARKET",
-            stopPrice=str(normalized_price if normalized_price is not None else sl_price),
+            stopPrice=self._decimal_to_str(normalized_price if normalized_price is not None else sl_price),
             closePosition="true",
         )
         await self._safe_alert("notify_modification", pair, "set_sl", f"sl={sl_price}")

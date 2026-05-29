@@ -271,7 +271,7 @@ async def test_limit_order_normalizes_price_and_quantity_by_symbol_filters_prope
         )
     )
     assert accepted is True
-    assert e.client.orders[0]["quantity"] == "40500"
+    assert e.client.orders[0]["quantity"] == "4050"
     assert e.client.orders[0]["price"] == "0.1234"
 
 

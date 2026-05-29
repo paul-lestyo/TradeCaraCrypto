@@ -107,3 +107,23 @@ async def test_pending_limit_missing_on_exchange_assumed_canceled_property():
     await w._reconcile_pending_limit_orders()
     assert "BTCUSDT" in pm.removed
     assert "closed:BTCUSDT:cancel" in alert.sent
+
+
+@pytest.mark.asyncio
+async def test_reduce_only_filled_treated_as_manual_close_property():
+    pos = RunningPosition("BTCUSDT", Direction.LONG, Decimal("100"), Decimal("95"), [Decimal("110")], 50, "1", Decimal("0.1"), datetime.utcnow())
+    alert = _Alert()
+    pm = _PM(pos)
+    w = PriceWatcher(alert, pm)
+    await w.subscribe("BTCUSDT")
+    await w.handle_order_update(
+        "oid-close",
+        "MARKET",
+        "FILLED",
+        "BTCUSDT",
+        side="SELL",
+        reduce_only=True,
+        close_position=False,
+    )
+    assert "BTCUSDT" in pm.removed
+    assert "closed:BTCUSDT:manual_close" in alert.sent
