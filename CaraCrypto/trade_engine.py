@@ -25,6 +25,9 @@ from .position_manager import PositionManager
 
 
 class TradeEngine:
+    PARTIAL_CLOSE_PERCENT = 70.0
+    SL_PLUS_BUFFER_BPS = Decimal("10")
+
     def __init__(
         self,
         binance_client: Any,
@@ -148,6 +151,12 @@ class TradeEngine:
         low = min(entry_zone[0], entry_zone[1])
         high = max(entry_zone[0], entry_zone[1])
         return (low + high) / Decimal("2")
+
+    def _compute_sl_plus_from_entry(self, direction: Direction, entry_price: Decimal) -> Decimal:
+        buffer_ratio = self.SL_PLUS_BUFFER_BPS / Decimal("10000")
+        if direction == Direction.LONG:
+            return entry_price * (Decimal("1") + buffer_ratio)
+        return entry_price * (Decimal("1") - buffer_ratio)
 
     async def _get_market_reference_price(self, pair: str) -> Optional[Decimal]:
         methods = (
@@ -691,14 +700,30 @@ class TradeEngine:
         await self.db.store_modification_log(action.pair, "set_sl_breakeven", {"stop_loss": str(pos.entry_price)}, message_db_id)
 
     async def _handle_tp_partial(self, action: TradeAction, message_db_id: Optional[int]) -> None:
-        if not action.pair or not action.close_percentage:
+        if not action.pair:
             return
+        action.close_percentage = self.PARTIAL_CLOSE_PERCENT
         await self._update_tp_order_quantity(action.pair)
+        pos = self.position_manager.get_position(action.pair)
+        if pos:
+            sl_plus = self._compute_sl_plus_from_entry(pos.direction, pos.entry_price)
+            await self._cancel_existing_close_orders(action.pair, {"STOP_MARKET"})
+            await self._place_stop_market_order(action.pair, pos.direction, sl_plus)
+            await self.position_manager.update_sl(action.pair, sl_plus)
         await self._safe_alert(
             "send_alert",
-            f"TP1\npair={action.pair}\npartial_close={action.close_percentage}%",
+            f"TP1->SL+\npair={action.pair}\npartial_close={action.close_percentage}%",
         )
-        await self.db.store_modification_log(action.pair, "tp_partial", {"close_percentage": action.close_percentage}, message_db_id)
+        await self.db.store_modification_log(
+            action.pair,
+            "tp_partial",
+            {
+                "close_percentage": action.close_percentage,
+                "sl_plus_buffer_bps": str(self.SL_PLUS_BUFFER_BPS),
+                "new_sl": str(pos.current_sl) if pos and pos.current_sl is not None else None,
+            },
+            message_db_id,
+        )
 
     async def _update_tp_order_quantity(self, pair: str) -> None:
         pos = self.position_manager.get_position(pair)

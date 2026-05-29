@@ -197,6 +197,18 @@ async def test_sl_breakeven_replaces_old_sl_order():
 
 
 @pytest.mark.asyncio
+async def test_tp_partial_sets_sl_plus_buffer_property():
+    e = _engine()
+    await e.position_manager.add_position(
+        RunningPosition("BTCUSDT", Direction.LONG, Decimal("100"), Decimal("90"), [Decimal("110")], 50, "1", Decimal("0.1"), datetime.utcnow())
+    )
+    await e.execute_action(TradeAction(action=GeminiAction.TP_PARTIAL, pair="BTCUSDT", risk_level=RiskLevel.NORMAL))
+    stop_orders = [o for o in e.client.orders if o.get("type") == "STOP_MARKET"]
+    assert stop_orders
+    assert stop_orders[-1].get("stopPrice") == "100.1"
+
+
+@pytest.mark.asyncio
 async def test_limit_order_without_entry_rejected_property():
     e = _engine()
     accepted = await e.execute_action(
