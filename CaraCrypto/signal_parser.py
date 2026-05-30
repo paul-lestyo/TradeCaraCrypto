@@ -23,7 +23,7 @@ from PIL import Image
 
 from .config import GeminiConfig
 from .database import Database
-from .models import Direction, GeminiAction, MessageContext, OrderType, RiskLevel, TradeAction
+from .models import Direction, GeminiAction, MessageContext, RiskLevel, TradeAction
 
 
 class SignalParser:
@@ -39,44 +39,25 @@ class SignalParser:
         )
 
     def _build_prompt(self, context: MessageContext) -> str:
-        order_hint = self._infer_order_type_hint(context.current_message.text)
         action_hint = self._infer_action_hint(context.current_message.text)
         return (
             "Kamu parser signal Caracrypto. Return JSON saja dengan field: "
-            "action, pair, direction, order_type, entry_zone, entry_price, take_profit_levels, stop_loss, risk_level, close_percentage. "
+            "action, pair, direction, entry_zone, entry_price, take_profit_levels, stop_loss, risk_level, close_percentage. "
             "Action valid: new_signal, update_sl, set_sl_breakeven, tp_partial, cancel, reverse, re_entry, cutloss, skip. "
             f"Message: {context.current_message.text}\n"
             f"Reply text: {context.current_message.reply_text}\n"
             f"History: {context.history}\n"
             f"Exchange state (Binance): {context.exchange_state}\n"
-            f"Order hint: {order_hint}\n"
             f"Action hint: {action_hint}\n"
-            "Hint: market hanya jika ada perintah eksplisit seperti 'order now', 'open now', atau 'market order'. "
-            "Kata 'now' saja tanpa perintah eksplisit jangan dianggap market. "
-            "antri/limit/kuning/tunggu kuning => limit. "
+            "Jangan isi order_type. Penentuan market/limit dilakukan engine. "
             "Untuk image chart Caracrypto: garis/label kuning adalah area ENTRY; isi entry_zone sebagai array [lower, upper] dari area entry kuning. "
             "Jangan ambil bid/ask box, current price, candle price, atau label harga non-kuning sebagai entry. "
             "Jika ada beberapa label/garis kuning, tentukan direction dulu: untuk SHORT gunakan level kuning paling atas/upper entry zone; untuk LONG gunakan level kuning paling bawah/lower entry zone. "
             "Garis/label merah biasanya STOP LOSS. Garis/label hijau biasanya TAKE PROFIT bertingkat. "
-            "Jika entry_zone tidak bisa didapat, baru fallback ke entry_price tunggal. Jika order_type=limit, entry_zone/entry_price wajib diisi dari level entry visual/teks. "
+            "Jika entry_zone tidak bisa didapat, baru fallback ke entry_price tunggal. "
             "Gunakan Exchange state (Binance) untuk memahami pair yang benar-benar sedang open position / open order. "
             "Tag [OPEN]/[CLOSED] condong new_signal, [CANCEL] condong cancel."
         )
-
-    def _infer_order_type_hint(self, text: str) -> str:
-        t = (text or "").lower()
-        explicit_market_phrases = (
-            "order now",
-            "open now",
-            "entry now",
-            "market order",
-            "execute now",
-        )
-        if any(phrase in t for phrase in explicit_market_phrases):
-            return "market"
-        if any(k in t for k in ["antri", "limit", "kuning", "tunggu kuning"]):
-            return "limit"
-        return "unknown"
 
     def _infer_action_hint(self, text: str) -> str:
         t = (text or "").upper()
@@ -147,7 +128,6 @@ class SignalParser:
         try:
             pair = self._normalize_pair(payload.get("pair"))
             direction = self._enum_from_payload(Direction, payload["direction"]) if payload.get("direction") else None
-            order_type = self._enum_from_payload(OrderType, payload["order_type"]) if payload.get("order_type") else None
             entry_price = Decimal(str(payload["entry_price"])) if payload.get("entry_price") is not None else None
             entry_zone = [Decimal(str(x)) for x in payload.get("entry_zone", [])] if payload.get("entry_zone") else None
             tp_levels = [Decimal(str(x)) for x in payload.get("take_profit_levels", [])] if payload.get("take_profit_levels") else None
@@ -163,7 +143,6 @@ class SignalParser:
             action=action,
             pair=pair,
             direction=direction,
-            order_type=order_type,
             entry_price=entry_price,
             entry_zone=entry_zone,
             take_profit_levels=tp_levels,
@@ -193,7 +172,7 @@ class SignalParser:
         print(
             "[SignalParser] "
             f"message_db_id={message_db_id} action={action.action.value} "
-            f"pair={action.pair} order_type={action.order_type.value if action.order_type else None} "
+            f"pair={action.pair} "
             f"risk={action.risk_level.value}"
         )
         await self.db.update_message_gemini_response(message_db_id, payload, action.action.value)

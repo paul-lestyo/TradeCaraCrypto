@@ -47,6 +47,9 @@ class _Client:
     def futures_exchange_info(self, **_):
         return {"symbols": []}
 
+    def mark_price(self, **_):
+        return {"markPrice": "100"}
+
 
 class _PythonBinanceClient:
     def __init__(self):
@@ -106,12 +109,20 @@ class _Alert:
 class _PM:
     def __init__(self):
         self.m = {}
+        self.pending = {}
 
     async def add_position(self, p):
         self.m[p.pair] = p
 
+    async def add_pending_position(self, p):
+        self.pending[p.pair] = p
+
     async def remove_position(self, pair):
         self.m.pop(pair, None)
+        self.pending.pop(pair, None)
+
+    async def remove_pending_position(self, pair):
+        self.pending.pop(pair, None)
 
     async def update_sl(self, pair, sl):
         if pair in self.m:
@@ -122,6 +133,18 @@ class _PM:
 
     def get_position(self, pair):
         return self.m.get(pair)
+
+    def get_pending_position(self, pair):
+        return self.pending.get(pair)
+
+    def has_pending_position(self, pair):
+        return pair in self.pending
+
+    async def promote_pending_position(self, pair):
+        pos = self.pending.pop(pair, None)
+        if pos:
+            self.m[pair] = pos
+        return pos
 
     def get_running_pairs(self):
         return list(self.m.keys())
@@ -209,7 +232,7 @@ async def test_tp_partial_sets_sl_plus_buffer_property():
 
 
 @pytest.mark.asyncio
-async def test_limit_order_without_entry_rejected_property():
+async def test_order_without_entry_uses_market_reference_property():
     e = _engine()
     accepted = await e.execute_action(
         TradeAction(
@@ -220,9 +243,9 @@ async def test_limit_order_without_entry_rejected_property():
             risk_level=RiskLevel.NORMAL,
         )
     )
-    assert accepted is False
-    assert e.client.orders == []
-    assert not e.position_manager.has_position("PROMPTUSDT")
+    assert accepted is True
+    assert e.client.orders[0]["type"] == "MARKET"
+    assert e.position_manager.has_position("PROMPTUSDT")
 
 
 @pytest.mark.asyncio
@@ -240,7 +263,7 @@ async def test_limit_order_normalizes_pair_and_stores_real_order_id_property():
     )
     assert accepted is True
     assert e.client.orders[0]["symbol"] == "JELLYUSDT"
-    assert e.position_manager.get_position("JELLYUSDT").order_id == "1001"
+    assert e.position_manager.get_pending_position("JELLYUSDT").order_id == "1001"
 
 
 @pytest.mark.asyncio
@@ -291,6 +314,9 @@ async def test_limit_order_uses_entry_zone_average_then_normalizes_ticksize_prop
                 ]
             }
 
+        def mark_price(self, **_):
+            return {"markPrice": "0.01"}
+
     e = _engine(_ClientWithFilters())
     accepted = await e.execute_action(
         TradeAction(
@@ -298,10 +324,44 @@ async def test_limit_order_uses_entry_zone_average_then_normalizes_ticksize_prop
             pair="BRETTUSDT",
             direction=Direction.SHORT,
             order_type=OrderType.LIMIT,
-            entry_zone=[Decimal("0.006601"), Decimal("0.006643")],
+            entry_zone=[Decimal("0.0060"), Decimal("0.0080")],
             risk_level=RiskLevel.NORMAL,
         )
     )
     assert accepted is True
-    assert e.client.orders[0]["price"] == "0.0066"
-    assert e.position_manager.get_position("BRETTUSDT").entry_price == Decimal("0.0066")
+    assert e.client.orders[0]["price"] == "0.0074"
+    assert e.position_manager.get_pending_position("BRETTUSDT").entry_price == Decimal("0.0074")
+
+
+@pytest.mark.asyncio
+async def test_entry_zone_market_when_price_inside_or_below_area_property():
+    class _ClientWithFilters(_Client):
+        def futures_exchange_info(self, **_):
+            return {
+                "symbols": [
+                    {
+                        "symbol": "BRETTUSDT",
+                        "filters": [
+                            {"filterType": "PRICE_FILTER", "tickSize": "0.0001"},
+                            {"filterType": "LOT_SIZE", "stepSize": "1"},
+                        ],
+                    }
+                ]
+            }
+
+        def mark_price(self, **_):
+            return {"markPrice": "0.0075"}
+
+    e = _engine(_ClientWithFilters())
+    accepted = await e.execute_action(
+        TradeAction(
+            action=GeminiAction.NEW_SIGNAL,
+            pair="BRETTUSDT",
+            direction=Direction.LONG,
+            entry_zone=[Decimal("0.0060"), Decimal("0.0080")],
+            risk_level=RiskLevel.NORMAL,
+        )
+    )
+    assert accepted is True
+    assert e.client.orders[0]["type"] == "MARKET"
+    assert e.position_manager.get_position("BRETTUSDT") is not None

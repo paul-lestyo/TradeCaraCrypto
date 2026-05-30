@@ -97,6 +97,8 @@ class RunningPosition:
 @dataclass
 class PositionState:
     closed_today: List[str]
+    running_pairs: List[str] = field(default_factory=list)
+    pending_pairs: List[str] = field(default_factory=list)
 
 
 @dataclass

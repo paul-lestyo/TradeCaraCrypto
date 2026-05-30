@@ -87,8 +87,12 @@ async def _process_one_signal(raw, db, context_builder, parser, engine, watcher)
     )
     await db.populate_reply_data(message_db_id, raw.group_id, raw.reply_to_message_id)
     context = await context_builder.build_context(raw)
-    context.exchange_state = engine.get_exchange_context_state()
+    exchange_state = {}
+    get_exchange_context_state = getattr(engine, "get_exchange_context_state", None)
+    if callable(get_exchange_context_state):
+        exchange_state = get_exchange_context_state()
     if isinstance(context, dict):
+        context["exchange_state"] = exchange_state
         action = await parser.parse_and_classify(context, message_db_id)
         if not action or action.action == GeminiAction.SKIP:
             print(f"[Pipeline] message_id={raw.message_id} action=skip")
@@ -99,6 +103,7 @@ async def _process_one_signal(raw, db, context_builder, parser, engine, watcher)
             await _subscribe_watcher(watcher, action.pair, action)
             print(f"[Watcher] Subscribed pair={action.pair}")
         return
+    context.exchange_state = exchange_state
     state = context.position_state
     text_preview = (raw.text or "").replace("\n", " ").strip()
     if len(text_preview) > 160:
@@ -164,7 +169,7 @@ async def main() -> None:
             binance.FUTURES_DATA_URL = f"{cfg.binance.futures_base_url}/futures/data"
     print(f"[Main] Binance env={cfg.binance.env} base={cfg.binance.futures_base_url}")
     engine = TradeEngine(binance, db, alert_service, position_manager, cfg.risk)
-    watcher = PriceWatcher(alert_service, position_manager)
+    watcher = PriceWatcher(alert_service, position_manager, pending_missing_max_retry=3)
     watcher.trade_engine = engine
     engine.price_watcher = watcher
     print("[Main] Watcher wired to engine")

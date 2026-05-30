@@ -16,7 +16,7 @@ from decimal import Decimal
 
 from PIL import Image
 
-from CaraCrypto.models import Direction, GeminiAction, MessageContext, OrderType, PositionState, RawSignalMessage
+from CaraCrypto.models import Direction, GeminiAction, MessageContext, PositionState, RawSignalMessage
 from CaraCrypto.signal_parser import SignalParser
 
 
@@ -55,7 +55,6 @@ def test_null_risk_level_fallback_property():
             "action": "new_signal",
             "pair": "BTCUSDT",
             "direction": "long",
-            "order_type": "market",
             "entry_price": 100000,
             "risk_level": None,
         }
@@ -71,7 +70,6 @@ def test_uppercase_payload_enum_normalization_property():
             "action": "NEW_SIGNAL",
             "pair": "JELLY/USDT",
             "direction": "LONG",
-            "order_type": "LIMIT",
             "entry_zone": ["0.0122", "0.0124"],
             "entry_price": "0.0123",
             "risk_level": "NORMAL",
@@ -81,7 +79,7 @@ def test_uppercase_payload_enum_normalization_property():
     assert action.action == GeminiAction.NEW_SIGNAL
     assert action.pair == "JELLYUSDT"
     assert action.direction == Direction.LONG
-    assert action.order_type == OrderType.LIMIT
+    assert action.order_type is None
     assert action.entry_zone == [Decimal("0.0122"), Decimal("0.0124")]
     assert action.entry_price == Decimal("0.0123")
 

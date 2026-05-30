@@ -168,6 +168,9 @@ class SignalListener:
 
     async def _handle_message_edit(self, event) -> None:
         group_id = event.chat_id
+        topic_id = self._extract_topic_id(event.message)
+        if not self._should_process_message(group_id, topic_id):
+            return
         message_id = event.message.id
         new_text = event.raw_text or ""
         print(f"[SignalListener] Edit detected group={group_id} message_id={message_id}")

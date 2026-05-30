@@ -25,13 +25,15 @@ from .position_manager import PositionManager
 
 
 class PriceWatcher:
-    def __init__(self, alert_service: AlertService, position_manager: PositionManager):
+    def __init__(self, alert_service: AlertService, position_manager: PositionManager, pending_missing_max_retry: int = 1):
         self.alert_service = alert_service
         self.position_manager = position_manager
         self.trade_engine = None
         self._running = False
         self._subscriptions = set()
         self._pending_limit_orders: Dict[str, TradeAction] = {}
+        self._pending_order_missing_count: Dict[str, int] = {}
+        self._pending_missing_max_retry = max(1, int(pending_missing_max_retry))
         self._listen_key: str | None = None
         self._listen_key_task: asyncio.Task | None = None
 
@@ -69,6 +71,7 @@ class PriceWatcher:
 
     def register_pending_order(self, order_id: str, action: TradeAction) -> None:
         self._pending_limit_orders[order_id] = action
+        self._pending_order_missing_count.pop(order_id, None)
         print(
             "[PriceWatcher] register_pending_order "
             f"order_id={order_id} pair={action.pair} action={action.action.value} "
@@ -114,13 +117,28 @@ class PriceWatcher:
                     continue
                 open_order_ids_by_pair[pair] = open_order_ids
             if str(order_id) in open_order_ids_by_pair[pair]:
+                self._pending_order_missing_count.pop(order_id, None)
                 continue
             if running_pairs is not None and pair in running_pairs:
                 await self._handle_order_update(str(order_id), "LIMIT", "FILLED", pair)
                 continue
-            print(f"[PriceWatcher] pending order missing on exchange -> assume canceled pair={pair} order_id={order_id}")
+            missing_count = self._pending_order_missing_count.get(order_id, 0) + 1
+            self._pending_order_missing_count[order_id] = missing_count
+            if missing_count < self._pending_missing_max_retry:
+                print(
+                    "[PriceWatcher] pending order temporarily missing on exchange "
+                    f"pair={pair} order_id={order_id} missing_count={missing_count}"
+                )
+                continue
+            print(
+                "[PriceWatcher] pending order missing on exchange -> assume canceled "
+                f"pair={pair} order_id={order_id} missing_count={missing_count}"
+            )
             self._pending_limit_orders.pop(order_id, None)
-            if self.position_manager.get_position(pair):
+            self._pending_order_missing_count.pop(order_id, None)
+            has_pending = getattr(self.position_manager, "has_pending_position", None)
+            pending_exists = bool(callable(has_pending) and has_pending(pair))
+            if self.position_manager.get_position(pair) or pending_exists:
                 await self.position_manager.remove_position(pair)
             await self.unsubscribe(pair)
             await self._safe_alert("notify_closed", pair, "cancel")
@@ -307,9 +325,15 @@ class PriceWatcher:
             f"order_id={order_id} type={order_type} side={side} status={status} "
             f"reduce_only={reduce_only} close_position={close_position} pair={pair}"
         )
+        limit_fill_handled = False
         if order_id in self._pending_limit_orders and order_type == "LIMIT" and status == "FILLED":
             action = self._pending_limit_orders.pop(order_id)
-            pos = self.position_manager.get_position(action.pair or "")
+            self._pending_order_missing_count.pop(order_id, None)
+            pair_for_pos = action.pair or pair
+            promote_pending = getattr(self.position_manager, "promote_pending_position", None)
+            pos = await promote_pending(pair_for_pos) if callable(promote_pending) else None
+            if not pos:
+                pos = self.position_manager.get_position(pair_for_pos)
             if pos and self.trade_engine:
                 print(f"[PriceWatcher] limit filled -> set_tp_sl_orders pair={action.pair}")
                 await self._safe_alert("notify_order_filled", pair, "limit", str(pos.entry_price))
@@ -328,12 +352,25 @@ class PriceWatcher:
                     str(pos.current_sl) if pos.current_sl is not None else None,
                     "watcher_limit_fill",
                 )
+            limit_fill_handled = True
         if order_id in self._pending_limit_orders and order_type == "LIMIT" and status in {"CANCELED", "EXPIRED", "REJECTED"}:
             self._pending_limit_orders.pop(order_id, None)
-            if self.position_manager.get_position(pair):
+            self._pending_order_missing_count.pop(order_id, None)
+            has_pending = getattr(self.position_manager, "has_pending_position", None)
+            pending_exists = bool(callable(has_pending) and has_pending(pair))
+            if self.position_manager.get_position(pair) or pending_exists:
                 await self.position_manager.remove_position(pair)
             await self.unsubscribe(pair)
             await self._safe_alert("notify_closed", pair, "cancel")
+        if order_type == "LIMIT" and status == "FILLED" and not limit_fill_handled:
+            pos = self.position_manager.get_position(pair)
+            if not pos:
+                promote_pending = getattr(self.position_manager, "promote_pending_position", None)
+                promoted = await promote_pending(pair) if callable(promote_pending) else None
+                pos = promoted if promoted else self.position_manager.get_position(pair)
+            if pos and self.trade_engine:
+                await self._safe_alert("notify_order_filled", pair, "limit", str(pos.entry_price))
+                await self.trade_engine._set_tp_sl_orders(pos)
         if order_type in {"TAKE_PROFIT_MARKET", "STOP_MARKET"} and status == "FILLED":
             close_type = "TP" if order_type == "TAKE_PROFIT_MARKET" else "SL"
             print(f"[PriceWatcher] protection order filled -> close_type={close_type} pair={pair}")

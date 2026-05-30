@@ -159,6 +159,16 @@ class TradeEngine:
         high = max(entry_zone[0], entry_zone[1])
         return (low + high) / Decimal("2")
 
+    def _resolve_entry_from_zone_percent(self, entry_zone: Optional[Sequence[Decimal]], ratio: Decimal) -> Optional[Decimal]:
+        if not entry_zone or len(entry_zone) < 2:
+            return None
+        low = min(entry_zone[0], entry_zone[1])
+        high = max(entry_zone[0], entry_zone[1])
+        if high == low:
+            return low
+        clamped_ratio = min(Decimal("1"), max(Decimal("0"), ratio))
+        return low + ((high - low) * clamped_ratio)
+
     def _compute_sl_plus_from_entry(self, direction: Direction, entry_price: Decimal) -> Decimal:
         buffer_ratio = self.SL_PLUS_BUFFER_BPS / Decimal("10000")
         if direction == Direction.LONG:
@@ -371,6 +381,12 @@ class TradeEngine:
             return self._extract_running_pairs_from_payload(payload)
         if last_error:
             return None
+        pm_running = getattr(self.position_manager, "get_running_pairs", None)
+        if callable(pm_running):
+            try:
+                return {self._normalize_pair(p) for p in pm_running() if self._normalize_pair(p)}
+            except Exception:
+                pass
         return set()
 
     def _get_binance_open_order_pairs(self) -> Optional[set[str]]:
@@ -522,21 +538,42 @@ class TradeEngine:
         if not action.pair:
             await self._safe_alert("notify_error", "trade_engine_new_signal", "empty pair after normalization")
             return False
-        order_type = action.order_type or OrderType.MARKET
-        entry_raw = self._resolve_entry_from_zone(action.entry_zone)
-        if entry_raw is not None:
-            _, normalized_entry = self._normalize_order_inputs(action.pair, Decimal("1"), entry_raw)
-            action.entry_price = normalized_entry if normalized_entry is not None else entry_raw
+        order_type = OrderType.MARKET
+        market_price = await self._get_market_reference_price(action.pair)
+        zone_low = None
+        zone_high = None
+        entry_raw = None
+        if action.entry_zone and len(action.entry_zone) >= 2:
+            zone_low = min(action.entry_zone[0], action.entry_zone[1])
+            zone_high = max(action.entry_zone[0], action.entry_zone[1])
+            entry_raw = self._resolve_entry_from_zone_percent(action.entry_zone, Decimal("0.7"))
+
+        if zone_low is not None and zone_high is not None and entry_raw is not None:
+            if market_price is not None and market_price <= zone_high:
+                order_type = OrderType.MARKET
+                action.entry_price = market_price
+            else:
+                order_type = OrderType.LIMIT
+                _, normalized_entry = self._normalize_order_inputs(action.pair, Decimal("1"), entry_raw)
+                action.entry_price = normalized_entry if normalized_entry is not None else entry_raw
+        else:
+            if action.entry_price is not None:
+                if market_price is not None and market_price <= action.entry_price:
+                    order_type = OrderType.MARKET
+                    action.entry_price = market_price
+                else:
+                    order_type = OrderType.LIMIT
+            else:
+                order_type = OrderType.MARKET
+                action.entry_price = market_price
+
         if action.entry_price is None:
-            if order_type == OrderType.MARKET:
-                action.entry_price = await self._get_market_reference_price(action.pair)
-            if action.entry_price is None:
-                await self._safe_alert(
-                    "notify_error",
-                    "trade_engine_new_signal",
-                    f"missing entry_price/entry_zone for {order_type.value} order pair={action.pair}",
-                )
-                return False
+            await self._safe_alert(
+                "notify_error",
+                "trade_engine_new_signal",
+                f"missing entry_price/entry_zone for computed {order_type.value} order pair={action.pair}",
+            )
+            return False
         leverage = self.get_leverage(action.pair)
         account_balance = await self._get_account_balance()
         if account_balance is None:
@@ -578,11 +615,16 @@ class TradeEngine:
             opened_at=datetime.now(timezone.utc),
             message_db_id=message_db_id,
         )
-        await self.position_manager.add_position(pos)
         if order_type == OrderType.LIMIT:
+            add_pending = getattr(self.position_manager, "add_pending_position", None)
+            if callable(add_pending):
+                await add_pending(pos)
+            else:
+                await self.position_manager.add_position(pos)
             if self.price_watcher:
                 self.price_watcher.register_pending_order(order_id, action)
         else:
+            await self.position_manager.add_position(pos)
             await self._safe_alert("notify_order_filled", action.pair, order_type.value, str(action.entry_price))
             await self._set_tp_sl_orders(pos)
         final_tp = self._get_final_tp_level(pos.direction, pos.tp_levels) if pos.tp_levels else None
@@ -610,6 +652,23 @@ class TradeEngine:
             str(detail_entry if detail_entry is not None else action.entry_price),
         )
         return True
+
+    def _has_open_position_on_exchange(self, pair: str) -> bool:
+        running_pairs = self._get_binance_running_pairs()
+        if running_pairs is None:
+            return False
+        return pair in running_pairs
+
+    async def _resolve_open_position(self, pair: str) -> Optional[RunningPosition]:
+        pos = self.position_manager.get_position(pair)
+        if pos:
+            return pos
+        if not self._has_open_position_on_exchange(pair):
+            return None
+        promote_pending = getattr(self.position_manager, "promote_pending_position", None)
+        if callable(promote_pending):
+            return await promote_pending(pair)
+        return self.position_manager.get_position(pair)
 
     async def _set_tp_sl_orders(self, pos: RunningPosition) -> None:
         final_tp: Optional[Decimal] = None
@@ -699,8 +758,13 @@ class TradeEngine:
     async def _handle_set_sl_breakeven(self, action: TradeAction, message_db_id: Optional[int]) -> None:
         if not action.pair:
             return
-        pos = self.position_manager.get_position(action.pair)
+        pos = await self._resolve_open_position(action.pair)
         if not pos:
+            await self._safe_alert(
+                "notify_error",
+                "trade_engine_set_sl_breakeven",
+                f"skip pair={action.pair} reason=no_open_position",
+            )
             return
         await self._cancel_existing_close_orders(action.pair, {"STOP_MARKET"})
         await self._place_stop_market_order(action.pair, pos.direction, pos.entry_price)
@@ -714,9 +778,16 @@ class TradeEngine:
     async def _handle_tp_partial(self, action: TradeAction, message_db_id: Optional[int]) -> None:
         if not action.pair:
             return
+        pos = await self._resolve_open_position(action.pair)
+        if not pos:
+            await self._safe_alert(
+                "notify_error",
+                "trade_engine_tp_partial",
+                f"skip pair={action.pair} reason=no_open_position",
+            )
+            return
         action.close_percentage = self.PARTIAL_CLOSE_PERCENT
         await self._update_tp_order_quantity(action.pair)
-        pos = self.position_manager.get_position(action.pair)
         if pos:
             sl_plus = self._compute_sl_plus_from_entry(pos.direction, pos.entry_price)
             await self._cancel_existing_close_orders(action.pair, {"STOP_MARKET"})
@@ -758,6 +829,11 @@ class TradeEngine:
         if self.position_manager.has_position(action.pair):
             await self._cleanup_protection_orders(action.pair)
             await self.position_manager.remove_position(action.pair)
+        else:
+            has_pending = getattr(self.position_manager, "has_pending_position", None)
+            remove_pending = getattr(self.position_manager, "remove_pending_position", None)
+            if callable(has_pending) and callable(remove_pending) and has_pending(action.pair):
+                await remove_pending(action.pair)
         await self._safe_alert("notify_closed", action.pair, "cancel")
         await self.db.store_modification_log(action.pair, "cancel", {}, message_db_id)
 
