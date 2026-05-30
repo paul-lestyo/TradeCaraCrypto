@@ -25,8 +25,10 @@ from .position_manager import PositionManager
 
 
 class TradeEngine:
-    PARTIAL_CLOSE_PERCENT = 70.0
     SL_PLUS_BUFFER_BPS = Decimal("10")
+    PARTIAL_MEDIUM_PERCENT = 30.0
+    PARTIAL_LARGE_PERCENT = 60.0
+    PROFIT_LOCK_R = Decimal("0.5")
 
     def __init__(
         self,
@@ -174,6 +176,58 @@ class TradeEngine:
         if direction == Direction.LONG:
             return entry_price * (Decimal("1") + buffer_ratio)
         return entry_price * (Decimal("1") - buffer_ratio)
+
+    async def _compute_r_multiple(self, pos: RunningPosition) -> Optional[Decimal]:
+        if pos.current_sl is None:
+            return None
+        risk = (pos.entry_price - pos.current_sl).copy_abs()
+        if risk <= 0:
+            return None
+        current_price = await self._get_market_reference_price(pos.pair)
+        if current_price is None:
+            return None
+        if pos.direction == Direction.LONG:
+            reward = current_price - pos.entry_price
+        else:
+            reward = pos.entry_price - current_price
+        return reward / risk
+
+    def _compute_profit_lock_sl(self, pos: RunningPosition, profit_lock_r: Decimal) -> Optional[Decimal]:
+        if pos.current_sl is None:
+            return None
+        risk = (pos.entry_price - pos.current_sl).copy_abs()
+        if risk <= 0:
+            return None
+        lock_distance = risk * max(Decimal("0"), profit_lock_r)
+        if pos.direction == Direction.LONG:
+            return pos.entry_price + lock_distance
+        return pos.entry_price - lock_distance
+
+    async def _place_partial_close_market_order(
+        self, pos: RunningPosition, close_percentage: float
+    ) -> tuple[bool, Decimal, Decimal]:
+        if close_percentage <= 0:
+            return True, Decimal("0"), pos.quantity
+        if pos.quantity <= 0:
+            return False, Decimal("0"), Decimal("0")
+        close_fraction = Decimal(str(close_percentage)) / Decimal("100")
+        close_qty_raw = pos.quantity * close_fraction
+        normalized_qty, _ = self._normalize_order_inputs(pos.pair, close_qty_raw)
+        if normalized_qty <= 0:
+            return False, Decimal("0"), pos.quantity
+        side = "SELL" if pos.direction == Direction.LONG else "BUY"
+        self._create_futures_order(
+            symbol=pos.pair,
+            side=side,
+            type="MARKET",
+            quantity=self._decimal_to_str(normalized_qty),
+            reduceOnly="true",
+        )
+        remaining_qty = pos.quantity - normalized_qty
+        if remaining_qty < 0:
+            remaining_qty = Decimal("0")
+        await self.position_manager.update_quantity(pos.pair, remaining_qty)
+        return True, normalized_qty, remaining_qty
 
     async def _get_market_reference_price(self, pair: str) -> Optional[Decimal]:
         methods = (
@@ -786,24 +840,57 @@ class TradeEngine:
                 f"skip pair={action.pair} reason=no_open_position",
             )
             return
-        action.close_percentage = self.PARTIAL_CLOSE_PERCENT
+        r_multiple = await self._compute_r_multiple(pos)
+        if r_multiple is None:
+            await self._safe_alert(
+                "notify_error",
+                "trade_engine_tp_partial",
+                f"skip pair={action.pair} reason=cannot_compute_rr",
+            )
+            return
+        new_sl: Optional[Decimal] = None
+        close_percentage = 0.0
+        if r_multiple < Decimal("0.5"):
+            close_percentage = 0.0
+            new_sl = self._compute_sl_plus_from_entry(pos.direction, pos.entry_price)
+        elif r_multiple < Decimal("1.5"):
+            close_percentage = self.PARTIAL_MEDIUM_PERCENT
+            new_sl = pos.entry_price
+        else:
+            close_percentage = self.PARTIAL_LARGE_PERCENT
+            new_sl = self._compute_profit_lock_sl(pos, self.PROFIT_LOCK_R) or pos.entry_price
+
+        partial_ok, closed_qty, remaining_qty = await self._place_partial_close_market_order(pos, close_percentage)
+        if not partial_ok:
+            await self._safe_alert(
+                "notify_error",
+                "trade_engine_tp_partial",
+                f"skip pair={action.pair} reason=partial_close_failed",
+            )
+            return
+
         await self._update_tp_order_quantity(action.pair)
-        if pos:
-            sl_plus = self._compute_sl_plus_from_entry(pos.direction, pos.entry_price)
+        if new_sl is not None:
             await self._cancel_existing_close_orders(action.pair, {"STOP_MARKET"})
-            await self._place_stop_market_order(action.pair, pos.direction, sl_plus)
-            await self.position_manager.update_sl(action.pair, sl_plus)
+            await self._place_stop_market_order(action.pair, pos.direction, new_sl)
+            await self.position_manager.update_sl(action.pair, new_sl)
         await self._safe_alert(
             "send_alert",
-            f"TP1->SL+\npair={action.pair}\npartial_close={action.close_percentage}%",
+            "TP_PARTIAL_EXECUTED\n"
+            f"pair={action.pair}\n"
+            f"rr={r_multiple:.2f}\n"
+            f"partial_close={close_percentage}%\n"
+            f"closed_qty={self._decimal_to_str(closed_qty)}\n"
+            f"remaining_qty={self._decimal_to_str(remaining_qty)}",
         )
         await self.db.store_modification_log(
             action.pair,
             "tp_partial",
             {
-                "close_percentage": action.close_percentage,
+                "rr_multiple": str(r_multiple),
+                "close_percentage": close_percentage,
                 "sl_plus_buffer_bps": str(self.SL_PLUS_BUFFER_BPS),
-                "new_sl": str(pos.current_sl) if pos and pos.current_sl is not None else None,
+                "new_sl": str(new_sl) if new_sl is not None else None,
             },
             message_db_id,
         )

@@ -128,6 +128,10 @@ class _PM:
         if pair in self.m:
             self.m[pair].current_sl = sl
 
+    async def update_quantity(self, pair, qty):
+        if pair in self.m:
+            self.m[pair].quantity = qty
+
     def has_position(self, pair):
         return pair in self.m
 

@@ -77,6 +77,10 @@ class PositionManager:
         if pair in self._running_positions:
             self._running_positions[pair].tp_levels = list(tp_levels)
 
+    async def update_quantity(self, pair: str, new_qty) -> None:
+        if pair in self._running_positions:
+            self._running_positions[pair].quantity = new_qty
+
     def get_running_positions(self) -> List[RunningPosition]:
         return list(self._running_positions.values())
 
