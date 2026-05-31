@@ -26,7 +26,7 @@ from PIL import Image
 
 from .config import GeminiConfig
 from .database import Database
-from .models import Direction, GeminiAction, MessageContext, RiskLevel, TradeAction
+from .models import Direction, GeminiAction, MessageContext, OrderType, RiskLevel, TradeAction
 
 
 class SignalParser:
@@ -181,14 +181,28 @@ class SignalParser:
                 return None
         return None
 
+    def _has_now_market_override(self, text: Optional[str]) -> bool:
+        if not text:
+            return False
+        lowered = text.lower()
+        # Trigger tegas untuk "entry now now now" dan variasi sejenis.
+        if re.search(r"\b(now)\b(?:\W+\b(now)\b){1,}", lowered):
+            return True
+        if re.search(r"\b(entry|masuk)\b.{0,20}\bnow\b", lowered):
+            return True
+        if re.search(r"\bnow\b", lowered):
+            return True
+        return False
+
     def _apply_current_text_guard(self, context: MessageContext, payload: Dict[str, Any]) -> Dict[str, Any]:
         action_hint = self._infer_action_hint(context.current_message.text)
         guarded_actions = {"cancel", "update_sl", "set_sl_breakeven", "cutloss"}
-        if action_hint not in guarded_actions:
+        if action_hint not in guarded_actions and not self._has_now_market_override(context.current_message.text):
             return payload
 
         guarded = dict(payload)
-        guarded["action"] = action_hint
+        if action_hint in guarded_actions:
+            guarded["action"] = action_hint
         pair = guarded.get("pair")
         if not pair:
             pair = self._extract_pair_from_text(context.current_message.text)
@@ -201,6 +215,8 @@ class SignalParser:
             stop_loss = self._extract_stop_loss_from_text(context.current_message.text)
             if stop_loss is not None:
                 guarded["stop_loss"] = str(stop_loss)
+        if self._has_now_market_override(context.current_message.text):
+            guarded["order_type"] = "market"
         return guarded
 
     async def _call_gemini(self, prompt: str, images: Optional[list] = None) -> Dict[str, Any]:
@@ -244,6 +260,7 @@ class SignalParser:
         try:
             pair = self._normalize_pair(payload.get("pair"))
             direction = self._enum_from_payload(Direction, payload["direction"]) if payload.get("direction") else None
+            order_type = self._enum_from_payload(OrderType, payload["order_type"]) if payload.get("order_type") else None
             entry_price = Decimal(str(payload["entry_price"])) if payload.get("entry_price") is not None else None
             entry_zone = [Decimal(str(x)) for x in payload.get("entry_zone", [])] if payload.get("entry_zone") else None
             tp_levels = [Decimal(str(x)) for x in payload.get("take_profit_levels", [])] if payload.get("take_profit_levels") else None
@@ -259,6 +276,7 @@ class SignalParser:
             action=action,
             pair=pair,
             direction=direction,
+            order_type=order_type,
             entry_price=entry_price,
             entry_zone=entry_zone,
             take_profit_levels=tp_levels,

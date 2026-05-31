@@ -466,6 +466,40 @@ async def test_short_entry_zone_market_when_price_inside_or_above_area_property(
 
 
 @pytest.mark.asyncio
+async def test_order_type_market_override_forces_market_even_when_zone_would_limit_property():
+    class _ClientWithFilters(_Client):
+        def futures_exchange_info(self, **_):
+            return {
+                "symbols": [
+                    {
+                        "symbol": "BRETTUSDT",
+                        "filters": [
+                            {"filterType": "PRICE_FILTER", "tickSize": "0.0001"},
+                            {"filterType": "LOT_SIZE", "stepSize": "1"},
+                        ],
+                    }
+                ]
+            }
+
+        def mark_price(self, **_):
+            return {"markPrice": "0.005"}
+
+    e = _engine(_ClientWithFilters())
+    accepted = await e.execute_action(
+        TradeAction(
+            action=GeminiAction.NEW_SIGNAL,
+            pair="BRETTUSDT",
+            direction=Direction.SHORT,
+            order_type=OrderType.MARKET,
+            entry_zone=[Decimal("0.0060"), Decimal("0.0080")],
+            risk_level=RiskLevel.NORMAL,
+        )
+    )
+    assert accepted is True
+    assert e.client.orders[0]["type"] == "MARKET"
+
+
+@pytest.mark.asyncio
 async def test_initial_tp_sl_logs_without_modification_whatsapp_property():
     e = _engine()
     accepted = await e.execute_action(

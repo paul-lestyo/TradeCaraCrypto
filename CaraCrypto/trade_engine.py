@@ -15,6 +15,8 @@ import asyncio
 from collections.abc import Sequence as SequenceABC
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_DOWN
+import json
+from pathlib import Path
 from typing import Any, Optional, Sequence
 
 from .alert_service import AlertService
@@ -48,11 +50,38 @@ class TradeEngine:
         self._balance_max_attempts = 3
         self._balance_retry_delay_sec = 1.0
         self._symbol_filters: dict[str, dict[str, Decimal]] = {}
+        self._audit_log_path = Path("trade.log")
 
     async def _safe_alert(self, method: str, *args) -> None:
         fn = getattr(self.alert_service, method, None)
         if callable(fn):
             await fn(*args)
+
+    @staticmethod
+    def _audit_safe_value(value: Any) -> Any:
+        if isinstance(value, Decimal):
+            return str(value)
+        if isinstance(value, datetime):
+            return value.isoformat()
+        if hasattr(value, "value"):
+            return getattr(value, "value")
+        if isinstance(value, list):
+            return [TradeEngine._audit_safe_value(v) for v in value]
+        if isinstance(value, dict):
+            return {str(k): TradeEngine._audit_safe_value(v) for k, v in value.items()}
+        return value
+
+    def _write_audit_log(self, event: str, **fields: Any) -> None:
+        payload = {
+            "ts_utc": datetime.now(timezone.utc).isoformat(),
+            "event": event,
+        }
+        payload.update({k: self._audit_safe_value(v) for k, v in fields.items()})
+        try:
+            with self._audit_log_path.open("a", encoding="utf-8") as fp:
+                fp.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
 
     def get_leverage(self, pair: str) -> int:
         return LEVERAGE_MAP.get(pair, DEFAULT_LEVERAGE)
@@ -678,6 +707,7 @@ class TradeEngine:
             await self._safe_alert("notify_error", "trade_engine_new_signal", "empty pair after normalization")
             return False
         order_type = OrderType.MARKET
+        force_market = action.order_type == OrderType.MARKET
         market_price = await self._get_market_reference_price(action.pair)
         zone_low = None
         zone_high = None
@@ -687,7 +717,11 @@ class TradeEngine:
             zone_high = max(action.entry_zone[0], action.entry_zone[1])
             entry_raw = self._resolve_entry_from_zone_percent(action.entry_zone, Decimal("0.7"))
 
-        if zone_low is not None and zone_high is not None and entry_raw is not None:
+        if force_market:
+            order_type = OrderType.MARKET
+            if market_price is not None:
+                action.entry_price = market_price
+        elif zone_low is not None and zone_high is not None and entry_raw is not None:
             if self._should_use_market_entry(action.direction, market_price, zone_low, zone_high):
                 order_type = OrderType.MARKET
                 action.entry_price = market_price
@@ -707,24 +741,58 @@ class TradeEngine:
                 action.entry_price = market_price
 
         if action.entry_price is None:
+            self._write_audit_log(
+                "new_signal_rejected",
+                reason="missing_entry_price",
+                pair=action.pair,
+                message_db_id=message_db_id,
+                action=action.action.value,
+            )
             await self._safe_alert(
                 "notify_error",
                 "trade_engine_new_signal",
                 f"missing entry_price/entry_zone for computed {order_type.value} order pair={action.pair}",
             )
             return False
-        leverage = self.get_leverage(action.pair)
+        requested_leverage = self.get_leverage(action.pair)
         account_balance = await self._get_account_balance()
         if account_balance is None:
+            self._write_audit_log(
+                "new_signal_rejected",
+                reason="balance_unavailable",
+                pair=action.pair,
+                message_db_id=message_db_id,
+                action=action.action.value,
+            )
             return False
         if not await self._check_risk_limits(
-            action.pair, action.entry_price, action.risk_level, leverage, account_balance
+            action.pair, action.entry_price, action.risk_level, requested_leverage, account_balance
         ):
+            self._write_audit_log(
+                "new_signal_rejected",
+                reason="risk_limit",
+                pair=action.pair,
+                message_db_id=message_db_id,
+                action=action.action.value,
+                requested_leverage=requested_leverage,
+                account_balance=account_balance,
+            )
             return False
         await self._set_margin_mode_cross(action.pair)
-        leverage = await self._set_leverage(action.pair, leverage)
+        leverage = await self._set_leverage(action.pair, requested_leverage)
         qty = self._calculate_position_size(action.entry_price, leverage, action.risk_level, account_balance)
         if qty <= 0:
+            self._write_audit_log(
+                "new_signal_rejected",
+                reason="non_positive_qty",
+                pair=action.pair,
+                message_db_id=message_db_id,
+                action=action.action.value,
+                requested_leverage=requested_leverage,
+                effective_leverage=leverage,
+                account_balance=account_balance,
+                entry_price=action.entry_price,
+            )
             return False
         order_id = ""
         try:
@@ -733,6 +801,19 @@ class TradeEngine:
             else:
                 order_id = await self._place_market_order(action, qty)
         except Exception as exc:
+            self._write_audit_log(
+                "new_signal_failed",
+                reason="order_placement_exception",
+                pair=action.pair,
+                message_db_id=message_db_id,
+                action=action.action.value,
+                order_type=order_type.value,
+                requested_leverage=requested_leverage,
+                effective_leverage=leverage,
+                account_balance=account_balance,
+                qty=qty,
+                error=str(exc),
+            )
             await self._safe_alert(
                 "notify_error",
                 "trade_engine_order",
@@ -789,6 +870,26 @@ class TradeEngine:
             str(entry_raw) if entry_raw is not None else None,
             str(detail_entry_value),
         )
+        self._write_audit_log(
+            "new_signal_executed",
+            pair=action.pair,
+            message_db_id=message_db_id,
+            action=action.action.value,
+            side=action.direction.value if action.direction else None,
+            order_type=order_type.value,
+            order_id=order_id,
+            requested_leverage=requested_leverage,
+            effective_leverage=leverage,
+            account_balance=account_balance,
+            risk_level=action.risk_level.value,
+            entry_raw=entry_raw,
+            entry_final=detail_entry_value,
+            qty=detail_qty,
+            margin_used=margin_used,
+            stop_loss=detail_sl,
+            take_profit=detail_tp,
+            entry_zone=action.entry_zone,
+        )
         return True
 
     def _has_open_position_on_exchange(self, pair: str) -> bool:
@@ -818,6 +919,19 @@ class TradeEngine:
         if pos.current_sl is not None:
             await self._place_stop_market_order(pos.pair, pos.direction, pos.current_sl)
             await self.db.store_modification_log(pos.pair, "set_sl", {"stop_loss": str(pos.current_sl)}, log_message_id)
+        self._write_audit_log(
+            "protection_set",
+            pair=pos.pair,
+            message_db_id=log_message_id,
+            order_id=pos.order_id,
+            side=pos.direction.value,
+            entry_price=pos.entry_price,
+            quantity=pos.quantity,
+            leverage=pos.leverage,
+            stop_loss=pos.current_sl,
+            final_tp=final_tp,
+            tp_levels=pos.tp_levels,
+        )
         await self._safe_alert(
             "notify_tp_sl_set",
             pos.pair,
@@ -893,6 +1007,13 @@ class TradeEngine:
         await self._place_stop_market_order(action.pair, pos.direction, action.stop_loss)
         await self.position_manager.update_sl(action.pair, action.stop_loss)
         await self.db.store_modification_log(action.pair, "update_sl", {"stop_loss": str(action.stop_loss)}, message_db_id)
+        self._write_audit_log(
+            "update_sl",
+            pair=action.pair,
+            message_db_id=message_db_id,
+            side=pos.direction.value,
+            new_stop_loss=action.stop_loss,
+        )
 
     async def _handle_set_sl_breakeven(self, action: TradeAction, message_db_id: Optional[int]) -> None:
         if not action.pair:
@@ -913,6 +1034,14 @@ class TradeEngine:
             f"TP1->SL+\npair={action.pair}\nnew_sl={pos.entry_price}",
         )
         await self.db.store_modification_log(action.pair, "set_sl_breakeven", {"stop_loss": str(pos.entry_price)}, message_db_id)
+        self._write_audit_log(
+            "set_sl_breakeven",
+            pair=action.pair,
+            message_db_id=message_db_id,
+            side=pos.direction.value,
+            new_stop_loss=pos.entry_price,
+            entry_price=pos.entry_price,
+        )
 
     async def _handle_tp_partial(self, action: TradeAction, message_db_id: Optional[int]) -> None:
         if not action.pair:
@@ -979,6 +1108,16 @@ class TradeEngine:
             },
             message_db_id,
         )
+        self._write_audit_log(
+            "tp_partial_executed",
+            pair=action.pair,
+            message_db_id=message_db_id,
+            rr_multiple=r_multiple,
+            partial_close_percent=close_percentage,
+            closed_qty=closed_qty,
+            remaining_qty=remaining_qty,
+            new_stop_loss=new_sl,
+        )
 
     async def _update_tp_order_quantity(self, pair: str) -> None:
         pos = self.position_manager.get_position(pair)
@@ -994,6 +1133,7 @@ class TradeEngine:
         await self.position_manager.remove_position(action.pair)
         await self._safe_alert("notify_closed", action.pair, "cutloss")
         await self.db.store_modification_log(action.pair, "cutloss", {}, message_db_id)
+        self._write_audit_log("position_closed", pair=action.pair, message_db_id=message_db_id, reason="cutloss")
 
     async def _handle_cancel(self, action: TradeAction, message_db_id: Optional[int]) -> None:
         if not action.pair:
@@ -1008,6 +1148,7 @@ class TradeEngine:
                 await remove_pending(action.pair)
         await self._safe_alert("notify_closed", action.pair, "cancel")
         await self.db.store_modification_log(action.pair, "cancel", {}, message_db_id)
+        self._write_audit_log("position_closed", pair=action.pair, message_db_id=message_db_id, reason="cancel")
 
     async def _handle_reverse(self, action: TradeAction, message_db_id: Optional[int]) -> bool:
         if not action.pair:
@@ -1017,6 +1158,14 @@ class TradeEngine:
             await self._cleanup_protection_orders(action.pair)
             await self.position_manager.remove_position(action.pair)
             await self._safe_alert("notify_closed", action.pair, "reverse")
+            self._write_audit_log(
+                "position_closed",
+                pair=action.pair,
+                message_db_id=message_db_id,
+                reason="reverse",
+                previous_side=old.direction.value,
+                previous_entry=old.entry_price,
+            )
             new_direction = Direction.SHORT if old.direction == Direction.LONG else Direction.LONG
             reversed_action = TradeAction(
                 action=GeminiAction.NEW_SIGNAL,

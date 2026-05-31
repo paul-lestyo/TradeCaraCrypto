@@ -16,7 +16,7 @@ from decimal import Decimal
 
 from PIL import Image
 
-from CaraCrypto.models import Direction, GeminiAction, MessageContext, PositionState, RawSignalMessage
+from CaraCrypto.models import Direction, GeminiAction, MessageContext, OrderType, PositionState, RawSignalMessage
 from CaraCrypto.signal_parser import SignalParser
 
 
@@ -168,3 +168,50 @@ def test_current_sl_update_text_overrides_old_reply_sl_property():
     assert action.action == GeminiAction.UPDATE_SL
     assert action.pair == "USUALUSDT"
     assert action.stop_loss == Decimal("0.01285")
+
+
+def test_now_literal_forces_market_order_override_property():
+    p = _parser()
+    context = MessageContext(
+        current_message=RawSignalMessage(
+            text="[OPEN] D long entry now now now",
+            group_id=-1,
+            message_id=6001,
+            reply_text="[OPEN] D old plan",
+        ),
+        history=[],
+        position_state=PositionState(closed_today=[]),
+    )
+    payload = {
+        "action": "new_signal",
+        "pair": "DUSDT",
+        "direction": "LONG",
+        "entry_zone": [0.0114, 0.0117],
+    }
+    guarded = p._apply_current_text_guard(context, payload)
+    action = p._validate_and_build_action(guarded)
+    assert action is not None
+    assert action.order_type == OrderType.MARKET
+
+
+def test_single_now_word_forces_market_order_override_property():
+    p = _parser()
+    context = MessageContext(
+        current_message=RawSignalMessage(
+            text="[CLOSED] APT short now.",
+            group_id=-1,
+            message_id=6002,
+            reply_text="old plan",
+        ),
+        history=[],
+        position_state=PositionState(closed_today=[]),
+    )
+    payload = {
+        "action": "new_signal",
+        "pair": "APTUSDT",
+        "direction": "SHORT",
+    }
+    guarded = p._apply_current_text_guard(context, payload)
+    action = p._validate_and_build_action(guarded)
+    assert action is not None
+    assert action.order_type == OrderType.MARKET
