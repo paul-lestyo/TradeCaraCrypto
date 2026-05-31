@@ -5,7 +5,7 @@
 # Dependensi
 # python-binance, position_manager, alert_service.
 # Main Functions
-# `execute_action`, validasi order executable, dan handler per jenis aksi.
+# `execute_action`, seleksi entry/sizing direction-aware, dan handler proteksi.
 # Side Effects
 # Menempatkan/cancel/close order di Binance.
 
@@ -171,6 +171,19 @@ class TradeEngine:
         clamped_ratio = min(Decimal("1"), max(Decimal("0"), ratio))
         return low + ((high - low) * clamped_ratio)
 
+    def _should_use_market_entry(
+        self,
+        direction: Direction,
+        market_price: Optional[Decimal],
+        entry_floor: Decimal,
+        entry_ceiling: Decimal,
+    ) -> bool:
+        if market_price is None:
+            return False
+        if direction == Direction.LONG:
+            return market_price <= entry_ceiling
+        return market_price >= entry_floor
+
     def _compute_sl_plus_from_entry(self, direction: Direction, entry_price: Decimal) -> Decimal:
         buffer_ratio = self.SL_PLUS_BUFFER_BPS / Decimal("10000")
         if direction == Direction.LONG:
@@ -288,7 +301,7 @@ class TradeEngine:
             return leverage
 
     async def _get_account_balance(self) -> Optional[Decimal]:
-        """Ambil saldo USDT (availableBalance) dari Binance Futures USDT-M.
+        """Ambil saldo wallet USDT dari Binance Futures USDT-M.
 
         Mencoba sampai ``self._balance_max_attempts`` kali dengan backoff.
         Mengembalikan ``None`` kalau semua percobaan gagal; caller wajib
@@ -342,7 +355,7 @@ class TradeEngine:
         if response is None:
             return None
         if isinstance(response, dict):
-            for key in ("availableBalance", "balance", "walletBalance", "totalWalletBalance", "crossWalletBalance"):
+            for key in ("balance", "walletBalance", "totalWalletBalance", "crossWalletBalance", "availableBalance"):
                 if key in response:
                     value = self._coerce_positive_decimal(response[key])
                     if value is not None:
@@ -356,7 +369,7 @@ class TradeEngine:
                     continue
                 if item.get("asset") != "USDT":
                     continue
-                for key in ("availableBalance", "balance", "walletBalance", "crossWalletBalance"):
+                for key in ("balance", "walletBalance", "crossWalletBalance", "availableBalance"):
                     if key in item:
                         value = self._coerce_positive_decimal(item[key])
                         if value is not None:
@@ -375,15 +388,24 @@ class TradeEngine:
             return None
         return decimal_value
 
-    def _calculate_position_size(
-        self, entry_price: Decimal, leverage: int, risk_level: RiskLevel, balance: Decimal
-    ) -> Decimal:
+    def _calculate_margin_budget(self, balance: Decimal, risk_level: RiskLevel) -> Decimal:
         margin_pct = Decimal(str(self.risk_config.trade_margin_percent)) / Decimal("100")
         base_margin = balance * margin_pct
         if risk_level == RiskLevel.HIGH:
             base_margin *= Decimal(str(self.risk_config.high_risk_multiplier))
+        return max(base_margin, Decimal("0"))
+
+    def _calculate_position_size(
+        self, entry_price: Decimal, leverage: int, risk_level: RiskLevel, balance: Decimal
+    ) -> Decimal:
+        base_margin = self._calculate_margin_budget(balance, risk_level)
         qty = (base_margin * Decimal(leverage)) / entry_price
         return max(qty, Decimal("0"))
+
+    def _calculate_effective_margin_used(self, entry_price: Decimal, qty: Decimal, leverage: int) -> Decimal:
+        if entry_price <= 0 or qty <= 0 or leverage <= 0:
+            return Decimal("0")
+        return max((entry_price * qty) / Decimal(leverage), Decimal("0"))
 
     def _extract_running_pairs_from_payload(self, payload: Any) -> set[str]:
         positions: list[dict[str, Any]] = []
@@ -499,9 +521,7 @@ class TradeEngine:
             account_balance = await self._get_account_balance()
             if account_balance is None:
                 return False
-        margin = account_balance * Decimal(str(self.risk_config.trade_margin_percent)) / Decimal("100")
-        if risk_level == RiskLevel.HIGH:
-            margin *= Decimal(str(self.risk_config.high_risk_multiplier))
+        margin = self._calculate_margin_budget(account_balance, risk_level)
 
         day_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         daily_loss = await self.db.get_daily_loss(day_start)
@@ -603,7 +623,7 @@ class TradeEngine:
             entry_raw = self._resolve_entry_from_zone_percent(action.entry_zone, Decimal("0.7"))
 
         if zone_low is not None and zone_high is not None and entry_raw is not None:
-            if market_price is not None and market_price <= zone_high:
+            if self._should_use_market_entry(action.direction, market_price, zone_low, zone_high):
                 order_type = OrderType.MARKET
                 action.entry_price = market_price
             else:
@@ -612,7 +632,7 @@ class TradeEngine:
                 action.entry_price = normalized_entry if normalized_entry is not None else entry_raw
         else:
             if action.entry_price is not None:
-                if market_price is not None and market_price <= action.entry_price:
+                if self._should_use_market_entry(action.direction, market_price, action.entry_price, action.entry_price):
                     order_type = OrderType.MARKET
                     action.entry_price = market_price
                 else:
@@ -641,9 +661,6 @@ class TradeEngine:
         qty = self._calculate_position_size(action.entry_price, leverage, action.risk_level, account_balance)
         if qty <= 0:
             return False
-        margin_used = account_balance * Decimal(str(self.risk_config.trade_margin_percent)) / Decimal("100")
-        if action.risk_level == RiskLevel.HIGH:
-            margin_used *= Decimal(str(self.risk_config.high_risk_multiplier))
         order_id = ""
         try:
             if order_type == OrderType.LIMIT:
@@ -680,13 +697,15 @@ class TradeEngine:
         else:
             await self.position_manager.add_position(pos)
             await self._safe_alert("notify_order_filled", action.pair, order_type.value, str(action.entry_price))
-            await self._set_tp_sl_orders(pos)
+            await self._set_tp_sl_orders(pos, message_db_id)
         final_tp = self._get_final_tp_level(pos.direction, pos.tp_levels) if pos.tp_levels else None
         detail_qty, detail_entry = self._normalize_order_inputs(
             action.pair,
             qty,
             action.entry_price if order_type == OrderType.LIMIT else None,
         )
+        detail_entry_value = detail_entry if detail_entry is not None else action.entry_price
+        margin_used = self._calculate_effective_margin_used(detail_entry_value, detail_qty, leverage)
         _, detail_sl = self._normalize_order_inputs(action.pair, Decimal("1"), pos.current_sl) if pos.current_sl is not None else (Decimal("1"), None)
         _, detail_tp = self._normalize_order_inputs(action.pair, Decimal("1"), final_tp) if final_tp is not None else (Decimal("1"), None)
         await self._safe_alert(
@@ -694,7 +713,7 @@ class TradeEngine:
             action.pair,
             action.direction.value,
             order_type.value,
-            str(detail_entry if detail_entry is not None else action.entry_price),
+            str(detail_entry_value),
             str(detail_qty),
             leverage,
             f"{margin_used:.2f}",
@@ -703,7 +722,7 @@ class TradeEngine:
             action.action.value,
             str([str(x) for x in action.entry_zone]) if action.entry_zone else None,
             str(entry_raw) if entry_raw is not None else None,
-            str(detail_entry if detail_entry is not None else action.entry_price),
+            str(detail_entry_value),
         )
         return True
 
@@ -724,13 +743,16 @@ class TradeEngine:
             return await promote_pending(pair)
         return self.position_manager.get_position(pair)
 
-    async def _set_tp_sl_orders(self, pos: RunningPosition) -> None:
+    async def _set_tp_sl_orders(self, pos: RunningPosition, message_db_id: Optional[int] = None) -> None:
         final_tp: Optional[Decimal] = None
+        log_message_id = message_db_id if message_db_id is not None else pos.message_db_id
         if pos.tp_levels:
             final_tp = self._get_final_tp_level(pos.direction, pos.tp_levels)
             await self._place_take_profit_market_order(pos.pair, pos.direction, final_tp)
+            await self.db.store_modification_log(pos.pair, "set_tp", {"final_tp": str(final_tp)}, log_message_id)
         if pos.current_sl is not None:
             await self._place_stop_market_order(pos.pair, pos.direction, pos.current_sl)
+            await self.db.store_modification_log(pos.pair, "set_sl", {"stop_loss": str(pos.current_sl)}, log_message_id)
         await self._safe_alert(
             "notify_tp_sl_set",
             pos.pair,
@@ -784,7 +806,6 @@ class TradeEngine:
             stopPrice=self._decimal_to_str(normalized_price if normalized_price is not None else tp_price),
             closePosition="true",
         )
-        await self._safe_alert("notify_modification", pair, "set_tp", f"final_tp={tp_price}")
 
     async def _place_stop_market_order(self, pair: str, direction: Direction, sl_price: Decimal) -> None:
         side = "SELL" if direction == Direction.LONG else "BUY"
@@ -796,7 +817,6 @@ class TradeEngine:
             stopPrice=self._decimal_to_str(normalized_price if normalized_price is not None else sl_price),
             closePosition="true",
         )
-        await self._safe_alert("notify_modification", pair, "set_sl", f"sl={sl_price}")
 
     async def _handle_update_sl(self, action: TradeAction, message_db_id: Optional[int]) -> None:
         if not action.pair or action.stop_loss is None:

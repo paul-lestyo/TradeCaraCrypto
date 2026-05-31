@@ -5,7 +5,7 @@
 # Dependensi
 # google.generativeai, Pillow, database, models.
 # Main Functions
-# `parse_and_classify`, image-aware Gemini call, validasi enum tolerant-case, normalisasi pair.
+# `parse_and_classify`, image-aware Gemini call, guard teks aksi, validasi enum tolerant-case, normalisasi pair.
 # Side Effects
 # Memanggil Gemini API dan update row messages.
 
@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import re
 from decimal import Decimal
 from enum import Enum
 from typing import Any, Dict, Optional
@@ -27,6 +28,38 @@ from .models import Direction, GeminiAction, MessageContext, RiskLevel, TradeAct
 
 
 class SignalParser:
+    _PAIR_STOPWORDS = {
+        "ACTION",
+        "BATAL",
+        "BATALKAN",
+        "BE",
+        "BEP",
+        "CANCEL",
+        "CANCELED",
+        "CANCELLED",
+        "CLOSED",
+        "DI",
+        "GAK",
+        "GA",
+        "GERAK",
+        "HOLD",
+        "KALO",
+        "KALAU",
+        "KAMI",
+        "KE",
+        "LANJUT",
+        "LONG",
+        "OPEN",
+        "PERSEMPIT",
+        "SET",
+        "SHORT",
+        "SL",
+        "STOP",
+        "TP",
+        "UPDATE",
+        "USDT",
+    }
+
     def __init__(self, config: GeminiConfig, db: Database):
         self.config = config
         self.db = db
@@ -47,8 +80,12 @@ class SignalParser:
             f"Message: {context.current_message.text}\n"
             f"Reply text: {context.current_message.reply_text}\n"
             f"History: {context.history}\n"
+            f"Local position state: {context.position_state}\n"
             f"Exchange state (Binance): {context.exchange_state}\n"
             f"Action hint: {action_hint}\n"
+            "Aksi utama wajib ditentukan dari Message saat ini. Reply text, history, dan image reply hanya konteks pair/level. "
+            "Jika Message berisi cancel/batal/kami cancel, action wajib cancel walaupun reply/history/image terlihat seperti [OPEN]. "
+            "Jika Message berisi geser/update/persempit SL, action wajib update_sl dan ambil angka SL dari Message. "
             "Jangan isi order_type. Penentuan market/limit dilakukan engine. "
             "Untuk image chart Caracrypto: garis/label kuning adalah area ENTRY; isi entry_zone sebagai array [lower, upper] dari area entry kuning. "
             "Jangan ambil bid/ask box, current price, candle price, atau label harga non-kuning sebagai entry. "
@@ -60,32 +97,99 @@ class SignalParser:
         )
 
     def _infer_action_hint(self, text: str) -> str:
-        t = (text or "").upper()
-        if "[CANCEL]" in t:
+        raw = text or ""
+        t = raw.upper()
+        lowered = raw.lower()
+        if "[CANCEL]" in t or re.search(r"\b(cancel(?:ed|led)?|batal(?:kan)?|dibatal(?:kan)?|kami\s+cancel)\b", lowered):
             return "cancel"
         if "[OPEN]" in t or "[CLOSED]" in t:
             return "new_signal"
+        if re.search(r"\b(cut\s*loss|cutloss|cl)\b", lowered):
+            return "cutloss"
+        if re.search(r"\b(sl|stop\s*loss)\b.*\b(be|bep|break\s*even|breakeven|modal)\b", lowered):
+            return "set_sl_breakeven"
+        if re.search(r"\b(persempit|geser|pindah|naikkan|naikin|turunkan|turunin|ubah|update|set)\b.{0,40}\b(sl|stop\s*loss)\b", lowered):
+            return "update_sl"
+        if re.search(r"\b(sl|stop\s*loss)\b.{0,40}\b(di|ke|jadi|to|at)\b", lowered):
+            return "update_sl"
         return "unknown"
 
     def _collect_images(self, context: MessageContext) -> list:
         images = []
         if context.current_message.image_data:
-            images.append(context.current_message.image_data)
+            images.append(("Current message image", context.current_message.image_data))
         if context.current_message.reply_image_data:
-            images.append(context.current_message.reply_image_data)
+            images.append(("Reply context image", context.current_message.reply_image_data))
         return images
 
     def _build_gemini_content(self, prompt: str, images: list) -> Any:
         if not images:
             return prompt
         content = [prompt]
-        for image_data in images:
+        for image_part in images:
+            if isinstance(image_part, tuple) and len(image_part) == 2:
+                label, image_data = image_part
+            else:
+                label, image_data = "Image", image_part
             try:
                 with Image.open(io.BytesIO(image_data)) as img:
+                    content.append(f"{label}:")
                     content.append(img.copy())
             except Exception:
                 continue
         return content if len(content) > 1 else prompt
+
+    def _extract_pair_from_text(self, text: Optional[str]) -> Optional[str]:
+        if not text:
+            return None
+        upper = text.upper()
+        usdt_match = re.search(r"\b([A-Z0-9]{2,20})\s*/?\s*USDT\b", upper)
+        if usdt_match:
+            return f"{usdt_match.group(1)}USDT"
+        for token in re.findall(r"\b[A-Z0-9]{2,15}\b", upper):
+            if token in self._PAIR_STOPWORDS or token.isdigit():
+                continue
+            return f"{token}USDT"
+        return None
+
+    def _extract_stop_loss_from_text(self, text: Optional[str]) -> Optional[Decimal]:
+        if not text:
+            return None
+        patterns = (
+            r"\bSL\b[^\d+-]{0,30}([0-9]+(?:[.,][0-9]+)?)",
+            r"\bstop\s*loss\b[^\d+-]{0,30}([0-9]+(?:[.,][0-9]+)?)",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, text, flags=re.IGNORECASE)
+            if not match:
+                continue
+            try:
+                return Decimal(match.group(1).replace(",", "."))
+            except Exception:
+                return None
+        return None
+
+    def _apply_current_text_guard(self, context: MessageContext, payload: Dict[str, Any]) -> Dict[str, Any]:
+        action_hint = self._infer_action_hint(context.current_message.text)
+        guarded_actions = {"cancel", "update_sl", "set_sl_breakeven", "cutloss"}
+        if action_hint not in guarded_actions:
+            return payload
+
+        guarded = dict(payload)
+        guarded["action"] = action_hint
+        pair = guarded.get("pair")
+        if not pair:
+            pair = self._extract_pair_from_text(context.current_message.text)
+        if not pair:
+            pair = self._extract_pair_from_text(context.current_message.reply_text)
+        if pair:
+            guarded["pair"] = pair
+
+        if action_hint == "update_sl":
+            stop_loss = self._extract_stop_loss_from_text(context.current_message.text)
+            if stop_loss is not None:
+                guarded["stop_loss"] = str(stop_loss)
+        return guarded
 
     async def _call_gemini(self, prompt: str, images: Optional[list] = None) -> Dict[str, Any]:
         model = genai.GenerativeModel(self.config.model)
@@ -164,6 +268,10 @@ class SignalParser:
         )
         payload = await self._call_gemini(prompt, images)
         print(f"[SignalParser] Gemini parsed payload={payload}")
+        guarded_payload = self._apply_current_text_guard(context, payload)
+        if guarded_payload != payload:
+            print(f"[SignalParser] Text guard adjusted payload={guarded_payload}")
+        payload = guarded_payload
         action = self._validate_and_build_action(payload)
         if not action:
             print(f"[SignalParser] Invalid payload -> skip message_db_id={message_db_id}")

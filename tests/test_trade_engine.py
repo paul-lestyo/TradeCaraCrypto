@@ -5,7 +5,7 @@
 # Dependensi
 # CaraCrypto.trade_engine, CaraCrypto.models.
 # Main Functions
-# Validasi property task 11.6, order executable, dan adapter Binance.
+# Validasi property task 11.6, seleksi entry/margin/proteksi, dan adapter Binance.
 # Side Effects
 # Tidak ada.
 
@@ -82,8 +82,11 @@ class _PythonBinanceClient:
 
 
 class _DB:
-    async def store_modification_log(self, *_):
-        return None
+    def __init__(self):
+        self.logs = []
+
+    async def store_modification_log(self, pair, action_type, details, message_id):
+        self.logs.append((pair, action_type, details, message_id))
 
     async def get_daily_loss(self, *_):
         return Decimal("0")
@@ -92,12 +95,24 @@ class _DB:
 class _Alert:
     def __init__(self):
         self.errors = []
+        self.modifications = []
+        self.order_details = []
+        self.protections = []
 
     async def notify_new_order(self, *_):
         return None
 
-    async def notify_modification(self, *_):
+    async def notify_new_order_detail(self, *args):
+        self.order_details.append(args)
+
+    async def notify_order_filled(self, *_):
         return None
+
+    async def notify_tp_sl_set(self, *args):
+        self.protections.append(args)
+
+    async def notify_modification(self, *args):
+        self.modifications.append(args)
 
     async def notify_risk_limit(self, *_):
         return None
@@ -177,6 +192,14 @@ def test_final_tp_level_property():
     assert e._get_final_tp_level(Direction.SHORT, [Decimal("10"), Decimal("12")]) == Decimal("10")
 
 
+def test_usdt_balance_prefers_wallet_balance_over_available_property():
+    e = _engine()
+    balance = e._extract_usdt_balance(
+        [{"asset": "USDT", "availableBalance": "102.3", "balance": "200"}]
+    )
+    assert balance == Decimal("200")
+
+
 def test_python_binance_order_adapter_property():
     client = _PythonBinanceClient()
     e = _engine(client)
@@ -253,6 +276,26 @@ async def test_order_without_entry_uses_market_reference_property():
 
 
 @pytest.mark.asyncio
+async def test_margin_used_detail_uses_wallet_balance_and_effective_qty_property():
+    class _ClientWithWalletBalance(_Client):
+        def balance(self, **_):
+            return [{"asset": "USDT", "availableBalance": "102", "balance": "200"}]
+
+    e = _engine(_ClientWithWalletBalance())
+    accepted = await e.execute_action(
+        TradeAction(
+            action=GeminiAction.NEW_SIGNAL,
+            pair="PROMPTUSDT",
+            direction=Direction.LONG,
+            risk_level=RiskLevel.NORMAL,
+        )
+    )
+    assert accepted is True
+    assert e.client.orders[0]["quantity"] == "1"
+    assert e.alert_service.order_details[-1][6] == "2.00"
+
+
+@pytest.mark.asyncio
 async def test_limit_order_normalizes_pair_and_stores_real_order_id_property():
     e = _engine()
     accepted = await e.execute_action(
@@ -303,7 +346,7 @@ async def test_limit_order_normalizes_price_and_quantity_by_symbol_filters_prope
 
 
 @pytest.mark.asyncio
-async def test_limit_order_uses_entry_zone_average_then_normalizes_ticksize_property():
+async def test_short_entry_zone_limit_when_market_below_cheapest_area_property():
     class _ClientWithFilters(_Client):
         def futures_exchange_info(self, **_):
             return {
@@ -319,7 +362,7 @@ async def test_limit_order_uses_entry_zone_average_then_normalizes_ticksize_prop
             }
 
         def mark_price(self, **_):
-            return {"markPrice": "0.01"}
+            return {"markPrice": "0.005"}
 
     e = _engine(_ClientWithFilters())
     accepted = await e.execute_action(
@@ -333,6 +376,7 @@ async def test_limit_order_uses_entry_zone_average_then_normalizes_ticksize_prop
         )
     )
     assert accepted is True
+    assert e.client.orders[0]["type"] == "LIMIT"
     assert e.client.orders[0]["price"] == "0.0074"
     assert e.position_manager.get_pending_position("BRETTUSDT").entry_price == Decimal("0.0074")
 
@@ -369,3 +413,58 @@ async def test_entry_zone_market_when_price_inside_or_below_area_property():
     assert accepted is True
     assert e.client.orders[0]["type"] == "MARKET"
     assert e.position_manager.get_position("BRETTUSDT") is not None
+
+
+@pytest.mark.asyncio
+async def test_short_entry_zone_market_when_price_inside_or_above_area_property():
+    class _ClientWithFilters(_Client):
+        def futures_exchange_info(self, **_):
+            return {
+                "symbols": [
+                    {
+                        "symbol": "BRETTUSDT",
+                        "filters": [
+                            {"filterType": "PRICE_FILTER", "tickSize": "0.0001"},
+                            {"filterType": "LOT_SIZE", "stepSize": "1"},
+                        ],
+                    }
+                ]
+            }
+
+        def mark_price(self, **_):
+            return {"markPrice": "0.0075"}
+
+    e = _engine(_ClientWithFilters())
+    accepted = await e.execute_action(
+        TradeAction(
+            action=GeminiAction.NEW_SIGNAL,
+            pair="BRETTUSDT",
+            direction=Direction.SHORT,
+            entry_zone=[Decimal("0.0060"), Decimal("0.0080")],
+            risk_level=RiskLevel.NORMAL,
+        )
+    )
+    assert accepted is True
+    assert e.client.orders[0]["type"] == "MARKET"
+    assert e.position_manager.get_position("BRETTUSDT") is not None
+
+
+@pytest.mark.asyncio
+async def test_initial_tp_sl_logs_without_modification_whatsapp_property():
+    e = _engine()
+    accepted = await e.execute_action(
+        TradeAction(
+            action=GeminiAction.NEW_SIGNAL,
+            pair="PROMPTUSDT",
+            direction=Direction.LONG,
+            take_profit_levels=[Decimal("110")],
+            stop_loss=Decimal("90"),
+            risk_level=RiskLevel.NORMAL,
+        ),
+        message_db_id=42,
+    )
+    assert accepted is True
+    assert e.alert_service.modifications == []
+    assert e.alert_service.protections == [("PROMPTUSDT", "110", "90", "engine")]
+    assert ("PROMPTUSDT", "set_tp", {"final_tp": "110"}, 42) in e.db.logs
+    assert ("PROMPTUSDT", "set_sl", {"stop_loss": "90"}, 42) in e.db.logs

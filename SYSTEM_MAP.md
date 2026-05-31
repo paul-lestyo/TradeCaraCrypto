@@ -37,7 +37,7 @@
 - `config.py`: loader env + dataclass konfigurasi aplikasi.
 - `models.py`: enum domain dan dataclass payload/state/result.
 - `signal_listener.py`: listener Telethon untuk new message + edit event + reply/image context.
-- `signal_parser.py`: Gemini single-call parser text+image, hint klasifikasi, validasi action.
+- `signal_parser.py`: Gemini single-call parser text+image, guard teks aksi current-message, hint klasifikasi, validasi action.
 - `trade_engine.py`: action executor Binance-API-like client (client diinjeksikan, adapter `new_order`/`futures_create_order`, dan return status eksekusi untuk gating watcher).
 - `price_watcher.py`: alert-only price watcher + handler user data stream events.
 - `database.py`: SQLAlchemy async DAL 3 tabel.

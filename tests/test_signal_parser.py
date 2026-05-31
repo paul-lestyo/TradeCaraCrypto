@@ -5,7 +5,7 @@
 # Dependensi
 # CaraCrypto.signal_parser, CaraCrypto.models.
 # Main Functions
-# Validasi property task 9.2, normalisasi payload Gemini, dan image-aware prompt.
+# Validasi property task 9.2, normalisasi payload Gemini, guard teks aksi, dan image-aware prompt.
 # Side Effects
 # Tidak ada.
 
@@ -34,6 +34,8 @@ def test_tag_based_classification_hints_property():
     assert p._infer_action_hint("[OPEN] BTC") == "new_signal"
     assert p._infer_action_hint("[CLOSED] ETH") == "new_signal"
     assert p._infer_action_hint("[CANCEL] XRP") == "cancel"
+    assert p._infer_action_hint("USUAL kami cancel. Gak gerak.") == "cancel"
+    assert p._infer_action_hint("USUAL lanjut hold, persempit SL di 0.01285") == "update_sl"
 
 
 def test_invalid_response_rejection_property():
@@ -97,6 +99,7 @@ def test_prompt_declares_yellow_level_as_entry_property():
     assert "untuk SHORT gunakan level kuning paling atas" in prompt
     assert "untuk LONG gunakan level kuning paling bawah" in prompt
     assert "isi entry_zone sebagai array [lower, upper]" in prompt
+    assert "Aksi utama wajib ditentukan dari Message saat ini" in prompt
 
 
 def test_gemini_content_includes_image_parts_property():
@@ -106,4 +109,59 @@ def test_gemini_content_includes_image_parts_property():
     content = p._build_gemini_content("prompt", [buf.getvalue()])
     assert isinstance(content, list)
     assert content[0] == "prompt"
-    assert len(content) == 2
+    assert content[1] == "Image:"
+    assert len(content) == 3
+
+
+def test_current_cancel_text_overrides_reply_signal_payload_property():
+    p = _parser()
+    context = MessageContext(
+        current_message=RawSignalMessage(
+            text="USUAL kami cancel. Gak gerak. Kalo lanjut hold, persempit SL di 0.01285",
+            group_id=-1,
+            message_id=5239,
+            reply_text="[OPEN] USUAL long setup",
+        ),
+        history=[],
+        position_state=PositionState(closed_today=[]),
+    )
+    payload = {
+        "action": "new_signal",
+        "pair": "USUALUSDT",
+        "direction": "LONG",
+        "entry_zone": [0.01283, 0.01311],
+        "take_profit_levels": [0.01342, 0.0155],
+        "stop_loss": 0.01261,
+    }
+    guarded = p._apply_current_text_guard(context, payload)
+    action = p._validate_and_build_action(guarded)
+    assert action is not None
+    assert action.action == GeminiAction.CANCEL
+    assert action.pair == "USUALUSDT"
+
+
+def test_current_sl_update_text_overrides_old_reply_sl_property():
+    p = _parser()
+    context = MessageContext(
+        current_message=RawSignalMessage(
+            text="USUAL lanjut hold, persempit SL di 0.01285",
+            group_id=-1,
+            message_id=5240,
+            reply_text="[OPEN] USUAL old setup",
+        ),
+        history=[],
+        position_state=PositionState(closed_today=[]),
+    )
+    payload = {
+        "action": "new_signal",
+        "pair": "USUALUSDT",
+        "direction": "LONG",
+        "entry_zone": [0.01283, 0.01311],
+        "stop_loss": 0.01261,
+    }
+    guarded = p._apply_current_text_guard(context, payload)
+    action = p._validate_and_build_action(guarded)
+    assert action is not None
+    assert action.action == GeminiAction.UPDATE_SL
+    assert action.pair == "USUALUSDT"
+    assert action.stop_loss == Decimal("0.01285")
