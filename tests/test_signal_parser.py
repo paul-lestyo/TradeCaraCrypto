@@ -100,6 +100,9 @@ def test_prompt_declares_yellow_level_as_entry_property():
     assert "untuk LONG gunakan level kuning paling bawah" in prompt
     assert "isi entry_zone sebagai array [lower, upper]" in prompt
     assert "Aksi utama wajib ditentukan dari Message saat ini" in prompt
+    assert "PRIORITAS WAJIB: Message saat ini >> Exchange state >> Local position state >> History >> Reply text" in prompt
+    assert "Reply text hanya informasi tambahan, bukan sumber utama aksi" in prompt
+    assert "Jika Reply text berisi trade plan [OPEN]/entry/TP/SL lama, jangan dijadikan aksi baru" in prompt
 
 
 def test_gemini_content_includes_image_parts_property():

@@ -50,6 +50,9 @@ class _Client:
     def mark_price(self, **_):
         return {"markPrice": "100"}
 
+    def futures_leverage_bracket(self, **_):
+        return []
+
 
 class _PythonBinanceClient:
     def __init__(self):
@@ -192,12 +195,12 @@ def test_final_tp_level_property():
     assert e._get_final_tp_level(Direction.SHORT, [Decimal("10"), Decimal("12")]) == Decimal("10")
 
 
-def test_usdt_balance_prefers_wallet_balance_over_available_property():
+def test_usdt_balance_prefers_available_over_wallet_property():
     e = _engine()
     balance = e._extract_usdt_balance(
         [{"asset": "USDT", "availableBalance": "102.3", "balance": "200"}]
     )
-    assert balance == Decimal("200")
+    assert balance == Decimal("102.3")
 
 
 def test_python_binance_order_adapter_property():
@@ -217,6 +220,19 @@ async def test_python_binance_margin_and_leverage_adapter_property():
     assert client.margin_calls[0]["symbol"] == "BTCUSDT"
     assert client.leverage_calls[0]["leverage"] == 125
     assert leverage == 125
+
+
+@pytest.mark.asyncio
+async def test_set_leverage_clamps_to_pair_max_from_brackets_property():
+    class _ClientWithMaxLeverage(_Client):
+        def futures_leverage_bracket(self, **kwargs):
+            if kwargs.get("symbol") == "DUSDT":
+                return [{"symbol": "DUSDT", "brackets": [{"initialLeverage": 20}]}]
+            return []
+
+    e = _engine(_ClientWithMaxLeverage())
+    leverage = await e._set_leverage("DUSDT", 50)
+    assert leverage == 20
 
 
 @pytest.mark.asyncio
@@ -276,7 +292,7 @@ async def test_order_without_entry_uses_market_reference_property():
 
 
 @pytest.mark.asyncio
-async def test_margin_used_detail_uses_wallet_balance_and_effective_qty_property():
+async def test_margin_used_detail_uses_available_balance_and_effective_qty_property():
     class _ClientWithWalletBalance(_Client):
         def balance(self, **_):
             return [{"asset": "USDT", "availableBalance": "102", "balance": "200"}]
@@ -291,8 +307,8 @@ async def test_margin_used_detail_uses_wallet_balance_and_effective_qty_property
         )
     )
     assert accepted is True
-    assert e.client.orders[0]["quantity"] == "1"
-    assert e.alert_service.order_details[-1][6] == "2.00"
+    assert e.client.orders[0]["quantity"] == "0.51"
+    assert e.alert_service.order_details[-1][6] == "1.02"
 
 
 @pytest.mark.asyncio

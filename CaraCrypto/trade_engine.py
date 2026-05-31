@@ -289,16 +289,80 @@ class TradeEngine:
             pass
 
     async def _set_leverage(self, pair: str, leverage: int) -> int:
+        requested = max(1, int(leverage))
+        max_allowed = self._get_pair_max_leverage(pair)
+        target = min(requested, max_allowed) if max_allowed is not None else requested
         try:
             if hasattr(self.client, "change_leverage"):
-                resp = self.client.change_leverage(symbol=pair, leverage=leverage)
+                resp = self.client.change_leverage(symbol=pair, leverage=target)
             elif hasattr(self.client, "futures_change_leverage"):
-                resp = self.client.futures_change_leverage(symbol=pair, leverage=leverage)
+                resp = self.client.futures_change_leverage(symbol=pair, leverage=target)
             else:
-                return leverage
-            return int(resp.get("leverage", leverage))
+                return target
+            return max(1, int(resp.get("leverage", target)))
         except Exception:
-            return leverage
+            return target
+
+    def _get_pair_max_leverage(self, pair: str) -> Optional[int]:
+        methods = ("leverage_brackets", "futures_leverage_bracket", "leverageBracket")
+        for method_name in methods:
+            fn = getattr(self.client, method_name, None)
+            if not callable(fn):
+                continue
+            for kwargs in ({"symbol": pair}, {"symbols": [pair]}, {}):
+                try:
+                    payload = fn(**kwargs)
+                except TypeError:
+                    continue
+                except Exception:
+                    break
+                value = self._extract_pair_max_leverage(payload, pair)
+                if value is not None:
+                    return value
+                break
+        return None
+
+    def _extract_pair_max_leverage(self, payload: Any, pair: str) -> Optional[int]:
+        if payload is None:
+            return None
+        rows: list[dict[str, Any]] = []
+        if isinstance(payload, dict):
+            rows = [payload]
+        elif isinstance(payload, SequenceABC) and not isinstance(payload, (str, bytes)):
+            rows = [x for x in payload if isinstance(x, dict)]
+        for row in rows:
+            symbol = str(row.get("symbol") or row.get("pair") or "").upper()
+            if symbol and symbol != pair:
+                continue
+            brackets = row.get("brackets")
+            if isinstance(brackets, SequenceABC) and not isinstance(brackets, (str, bytes)):
+                values: list[int] = []
+                for bracket in brackets:
+                    if not isinstance(bracket, dict):
+                        continue
+                    for key in ("initialLeverage", "maxLeverage", "leverage"):
+                        raw = bracket.get(key)
+                        if raw is None:
+                            continue
+                        try:
+                            parsed = int(raw)
+                        except Exception:
+                            continue
+                        if parsed > 0:
+                            values.append(parsed)
+                if values:
+                    return max(values)
+            for key in ("initialLeverage", "maxLeverage", "leverage"):
+                raw = row.get(key)
+                if raw is None:
+                    continue
+                try:
+                    parsed = int(raw)
+                except Exception:
+                    continue
+                if parsed > 0:
+                    return parsed
+        return None
 
     async def _get_account_balance(self) -> Optional[Decimal]:
         """Ambil saldo wallet USDT dari Binance Futures USDT-M.
@@ -355,7 +419,8 @@ class TradeEngine:
         if response is None:
             return None
         if isinstance(response, dict):
-            for key in ("balance", "walletBalance", "totalWalletBalance", "crossWalletBalance", "availableBalance"):
+            # Prioritaskan dana yang benar-benar available untuk sizing.
+            for key in ("availableBalance", "crossWalletBalance", "walletBalance", "totalWalletBalance", "balance"):
                 if key in response:
                     value = self._coerce_positive_decimal(response[key])
                     if value is not None:
@@ -369,7 +434,7 @@ class TradeEngine:
                     continue
                 if item.get("asset") != "USDT":
                     continue
-                for key in ("balance", "walletBalance", "crossWalletBalance", "availableBalance"):
+                for key in ("availableBalance", "crossWalletBalance", "walletBalance", "balance"):
                     if key in item:
                         value = self._coerce_positive_decimal(item[key])
                         if value is not None:

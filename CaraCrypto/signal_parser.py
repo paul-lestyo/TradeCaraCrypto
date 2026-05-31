@@ -15,9 +15,11 @@ import asyncio
 import io
 import json
 import re
+from datetime import datetime
 from decimal import Decimal
 from enum import Enum
 from typing import Any, Dict, Optional
+from zoneinfo import ZoneInfo
 
 import google.generativeai as genai
 from PIL import Image
@@ -28,6 +30,7 @@ from .models import Direction, GeminiAction, MessageContext, RiskLevel, TradeAct
 
 
 class SignalParser:
+    _JKT_TZ = ZoneInfo("Asia/Jakarta")
     _PAIR_STOPWORDS = {
         "ACTION",
         "BATAL",
@@ -66,10 +69,14 @@ class SignalParser:
         if self.config.api_key:
             genai.configure(api_key=self.config.api_key)
         print(
-            "[SignalParser] Ready "
+            f"{self._log_prefix()} Ready "
             f"model={self.config.model} "
             f"api_key={'set' if bool(self.config.api_key) else 'missing'}"
         )
+
+    def _log_prefix(self) -> str:
+        now_jkt = datetime.now(self._JKT_TZ).strftime("%Y-%m-%d %H:%M:%S %Z")
+        return f"[{now_jkt}] [SignalParser]"
 
     def _build_prompt(self, context: MessageContext) -> str:
         action_hint = self._infer_action_hint(context.current_message.text)
@@ -83,7 +90,12 @@ class SignalParser:
             f"Local position state: {context.position_state}\n"
             f"Exchange state (Binance): {context.exchange_state}\n"
             f"Action hint: {action_hint}\n"
-            "Aksi utama wajib ditentukan dari Message saat ini. Reply text, history, dan image reply hanya konteks pair/level. "
+            "PRIORITAS WAJIB: Message saat ini >> Exchange state >> Local position state >> History >> Reply text. "
+            "Aksi utama wajib ditentukan dari Message saat ini. "
+            "Reply text hanya informasi tambahan, bukan sumber utama aksi. "
+            "Jika Reply text berisi trade plan [OPEN]/entry/TP/SL lama, jangan dijadikan aksi baru. "
+            "Jangan mengambil action, direction, entry, TP, atau SL dari Reply text kecuali untuk klarifikasi minor saat Message saat ini ambigu. "
+            "Reply text, history, dan image reply hanya konteks pair/level. "
             "Jika Message berisi cancel/batal/kami cancel, action wajib cancel walaupun reply/history/image terlihat seperti [OPEN]. "
             "Jika Message berisi geser/update/persempit SL, action wajib update_sl dan ambil angka SL dari Message. "
             "Jangan isi order_type. Penentuan market/limit dilakukan engine. "
@@ -260,25 +272,25 @@ class SignalParser:
         prompt = self._build_prompt(context)
         images = self._collect_images(context)
         print(
-            "[SignalParser] "
+            f"{self._log_prefix()} "
             f"message_id={context.current_message.message_id} "
             f"group={context.current_message.group_id} "
             f"images={len(images)} "
             f"history={len(context.history)}"
         )
         payload = await self._call_gemini(prompt, images)
-        print(f"[SignalParser] Gemini parsed payload={payload}")
+        print(f"{self._log_prefix()} Gemini parsed payload={payload}")
         guarded_payload = self._apply_current_text_guard(context, payload)
         if guarded_payload != payload:
-            print(f"[SignalParser] Text guard adjusted payload={guarded_payload}")
+            print(f"{self._log_prefix()} Text guard adjusted payload={guarded_payload}")
         payload = guarded_payload
         action = self._validate_and_build_action(payload)
         if not action:
-            print(f"[SignalParser] Invalid payload -> skip message_db_id={message_db_id}")
+            print(f"{self._log_prefix()} Invalid payload -> skip message_db_id={message_db_id}")
             await self.db.update_message_gemini_response(message_db_id, payload, "skip")
             return None
         print(
-            "[SignalParser] "
+            f"{self._log_prefix()} "
             f"message_db_id={message_db_id} action={action.action.value} "
             f"pair={action.pair} "
             f"risk={action.risk_level.value}"
