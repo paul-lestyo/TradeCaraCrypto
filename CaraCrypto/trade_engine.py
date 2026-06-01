@@ -50,7 +50,7 @@ class TradeEngine:
         self._balance_max_attempts = 3
         self._balance_retry_delay_sec = 1.0
         self._symbol_filters: dict[str, dict[str, Decimal]] = {}
-        self._audit_log_path = Path("trade.log")
+        self._audit_log_path = Path("logs/trade.log")
 
     async def _safe_alert(self, method: str, *args) -> None:
         fn = getattr(self.alert_service, method, None)
@@ -78,6 +78,7 @@ class TradeEngine:
         }
         payload.update({k: self._audit_safe_value(v) for k, v in fields.items()})
         try:
+            self._audit_log_path.parent.mkdir(parents=True, exist_ok=True)
             with self._audit_log_path.open("a", encoding="utf-8") as fp:
                 fp.write(json.dumps(payload, ensure_ascii=False) + "\n")
         except Exception:
@@ -715,7 +716,11 @@ class TradeEngine:
         if action.entry_zone and len(action.entry_zone) >= 2:
             zone_low = min(action.entry_zone[0], action.entry_zone[1])
             zone_high = max(action.entry_zone[0], action.entry_zone[1])
-            entry_raw = self._resolve_entry_from_zone_percent(action.entry_zone, Decimal("0.7"))
+            # Entry area directional:
+            # LONG  -> ambil 80% dari bawah ke atas area (dekat batas atas).
+            # SHORT -> kebalikannya, 20% dari bawah ke atas area (dekat batas bawah).
+            entry_ratio = Decimal("0.8") if action.direction == Direction.LONG else Decimal("0.2")
+            entry_raw = self._resolve_entry_from_zone_percent(action.entry_zone, entry_ratio)
 
         if force_market:
             order_type = OrderType.MARKET
@@ -1003,7 +1008,7 @@ class TradeEngine:
         pos = self.position_manager.get_position(action.pair)
         if not pos:
             return
-        await self._cancel_existing_close_orders(action.pair, {"STOP_MARKET"})
+        await self._cancel_existing_close_orders(action.pair, {"STOP_MARKET", "STOP"})
         await self._place_stop_market_order(action.pair, pos.direction, action.stop_loss)
         await self.position_manager.update_sl(action.pair, action.stop_loss)
         await self.db.store_modification_log(action.pair, "update_sl", {"stop_loss": str(action.stop_loss)}, message_db_id)
@@ -1026,7 +1031,7 @@ class TradeEngine:
                 f"skip pair={action.pair} reason=no_open_position",
             )
             return
-        await self._cancel_existing_close_orders(action.pair, {"STOP_MARKET"})
+        await self._cancel_existing_close_orders(action.pair, {"STOP_MARKET", "STOP"})
         await self._place_stop_market_order(action.pair, pos.direction, pos.entry_price)
         await self.position_manager.update_sl(action.pair, pos.entry_price)
         await self._safe_alert(
@@ -1042,6 +1047,40 @@ class TradeEngine:
             new_stop_loss=pos.entry_price,
             entry_price=pos.entry_price,
         )
+
+    async def _handle_set_sl_plus_buffer(self, pair: str, message_db_id: Optional[int] = None, source: str = "watcher_tp1") -> bool:
+        pos = await self._resolve_open_position(pair)
+        if not pos:
+            await self._safe_alert(
+                "notify_error",
+                "trade_engine_set_sl_plus_buffer",
+                f"skip pair={pair} reason=no_open_position",
+            )
+            return False
+        new_sl = self._compute_sl_plus_from_entry(pos.direction, pos.entry_price)
+        await self._cancel_existing_close_orders(pair, {"STOP_MARKET", "STOP"})
+        await self._place_stop_market_order(pair, pos.direction, new_sl)
+        await self.position_manager.update_sl(pair, new_sl)
+        await self.db.store_modification_log(
+            pair,
+            "set_sl_plus_buffer",
+            {"stop_loss": str(new_sl), "source": source},
+            message_db_id,
+        )
+        self._write_audit_log(
+            "set_sl_plus_buffer",
+            pair=pair,
+            message_db_id=message_db_id,
+            side=pos.direction.value,
+            source=source,
+            new_stop_loss=new_sl,
+            entry_price=pos.entry_price,
+        )
+        await self._safe_alert(
+            "send_alert",
+            f"TP1->SL+ buffer\npair={pair}\nnew_sl={new_sl}",
+        )
+        return True
 
     async def _handle_tp_partial(self, action: TradeAction, message_db_id: Optional[int]) -> None:
         if not action.pair:
@@ -1085,7 +1124,7 @@ class TradeEngine:
 
         await self._update_tp_order_quantity(action.pair)
         if new_sl is not None:
-            await self._cancel_existing_close_orders(action.pair, {"STOP_MARKET"})
+            await self._cancel_existing_close_orders(action.pair, {"STOP_MARKET", "STOP"})
             await self._place_stop_market_order(action.pair, pos.direction, new_sl)
             await self.position_manager.update_sl(action.pair, new_sl)
         await self._safe_alert(
@@ -1124,6 +1163,7 @@ class TradeEngine:
         if not pos:
             return
         if pos.tp_levels:
+            await self._cancel_existing_close_orders(pair, {"TAKE_PROFIT_MARKET", "TAKE_PROFIT"})
             await self._place_take_profit_market_order(pair, pos.direction, self._get_final_tp_level(pos.direction, pos.tp_levels))
 
     async def _handle_cutloss(self, action: TradeAction, message_db_id: Optional[int]) -> None:

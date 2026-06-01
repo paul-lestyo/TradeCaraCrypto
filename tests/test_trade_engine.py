@@ -393,8 +393,8 @@ async def test_short_entry_zone_limit_when_market_below_cheapest_area_property()
     )
     assert accepted is True
     assert e.client.orders[0]["type"] == "LIMIT"
-    assert e.client.orders[0]["price"] == "0.0074"
-    assert e.position_manager.get_pending_position("BRETTUSDT").entry_price == Decimal("0.0074")
+    assert e.client.orders[0]["price"] == "0.0064"
+    assert e.position_manager.get_pending_position("BRETTUSDT").entry_price == Decimal("0.0064")
 
 
 @pytest.mark.asyncio

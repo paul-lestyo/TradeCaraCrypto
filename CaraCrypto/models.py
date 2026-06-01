@@ -92,6 +92,8 @@ class RunningPosition:
     quantity: Decimal
     opened_at: datetime
     message_db_id: Optional[int] = None
+    tp1_notified: bool = False
+    tp1_sl_plus_applied: bool = False
 
 
 @dataclass

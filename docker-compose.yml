@@ -9,7 +9,6 @@
 # Side Effects
 # Menjalankan container app/database.
 
-version: "3.8"
 services:
   app:
     build: .
@@ -34,6 +33,7 @@ services:
       - TRADE_MARGIN_PERCENT=${TRADE_MARGIN_PERCENT}
     volumes:
       - ./sessions:/app/sessions
+      - ./logs:/app/logs
     restart: unless-stopped
 
   postgres:

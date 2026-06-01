@@ -76,15 +76,23 @@ async def _subscribe_watcher(watcher, pair, action):
 
 
 async def _process_one_signal(raw, db, context_builder, parser, engine, watcher):
-    message_db_id = await db.store_message(
-        {
-            "message_id": raw.message_id,
-            "group_id": raw.group_id,
-            "topic_id": raw.topic_id,
-            "text": raw.text,
-            "reply_to_message_id": raw.reply_to_message_id,
-        }
-    )
+    get_by_telegram_id = getattr(db, "get_message_by_telegram_id", None)
+    existing_message = None
+    if callable(get_by_telegram_id):
+        existing_message = await get_by_telegram_id(raw.message_id, raw.group_id)
+    if existing_message:
+        message_db_id = existing_message.id
+        await db.update_message_text(message_db_id, raw.text or "")
+    else:
+        message_db_id = await db.store_message(
+            {
+                "message_id": raw.message_id,
+                "group_id": raw.group_id,
+                "topic_id": raw.topic_id,
+                "text": raw.text,
+                "reply_to_message_id": raw.reply_to_message_id,
+            }
+        )
     await db.populate_reply_data(message_db_id, raw.group_id, raw.reply_to_message_id)
     context = await context_builder.build_context(raw)
     exchange_state = {}

@@ -83,10 +83,31 @@ class PriceWatcher:
             pos = self.position_manager.get_position(pair)
             if not pos:
                 continue
-            current_price = pos.entry_price
-            for tp in pos.tp_levels:
-                if self._check_tp_level_reached(pos.direction, current_price, tp):
-                    await self.alert_service.notify_tp_hit(pair, str(tp))
+            current_price = None
+            if self.trade_engine and hasattr(self.trade_engine, "_get_market_reference_price"):
+                try:
+                    current_price = await self.trade_engine._get_market_reference_price(pair)
+                except Exception:
+                    current_price = None
+            if current_price is None:
+                current_price = pos.entry_price
+
+            tp1 = self._get_tp1_level(pos.direction, pos.tp_levels)
+            if tp1 is not None and self._check_tp_level_reached(pos.direction, current_price, tp1):
+                if not pos.tp1_notified:
+                    await self.alert_service.notify_tp_hit(pair, str(tp1))
+                    pos.tp1_notified = True
+                if (
+                    self.trade_engine
+                    and not pos.tp1_sl_plus_applied
+                    and hasattr(self.trade_engine, "_handle_set_sl_plus_buffer")
+                ):
+                    applied = await self.trade_engine._handle_set_sl_plus_buffer(
+                        pair,
+                        source="watcher_tp1_auto",
+                    )
+                    if applied:
+                        pos.tp1_sl_plus_applied = True
             if pos.current_sl is not None and self._check_sl_reached(pos.direction, current_price, pos.current_sl):
                 await self.alert_service.notify_sl_hit(pair, str(pos.current_sl))
 
@@ -152,6 +173,13 @@ class PriceWatcher:
         if direction == Direction.LONG:
             return price <= sl_level
         return price >= sl_level
+
+    def _get_tp1_level(self, direction: Direction, tp_levels: list[Decimal]) -> Decimal | None:
+        if not tp_levels:
+            return None
+        if direction == Direction.LONG:
+            return min(tp_levels)
+        return max(tp_levels)
 
     async def _start_user_data_stream(self) -> None:
         print("[PriceWatcher] User data stream loop started")
