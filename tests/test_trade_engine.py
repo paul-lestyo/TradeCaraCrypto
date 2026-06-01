@@ -266,7 +266,7 @@ async def test_sl_breakeven_replaces_old_sl_order():
 async def test_tp_partial_sets_sl_plus_buffer_property():
     e = _engine()
     await e.position_manager.add_position(
-        RunningPosition("BTCUSDT", Direction.LONG, Decimal("100"), Decimal("90"), [Decimal("110")], 50, "1", Decimal("0.1"), datetime.utcnow())
+        RunningPosition("BTCUSDT", Direction.LONG, Decimal("100"), Decimal("90"), [Decimal("99")], 50, "1", Decimal("0.1"), datetime.utcnow())
     )
     await e.execute_action(TradeAction(action=GeminiAction.TP_PARTIAL, pair="BTCUSDT", risk_level=RiskLevel.NORMAL))
     stop_orders = [o for o in e.client.orders if o.get("type") == "STOP_MARKET"]

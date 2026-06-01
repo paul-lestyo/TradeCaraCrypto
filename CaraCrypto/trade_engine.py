@@ -246,6 +246,29 @@ class TradeEngine:
             return pos.entry_price + lock_distance
         return pos.entry_price - lock_distance
 
+    def _ordered_tp_levels(self, pos: RunningPosition) -> list[Decimal]:
+        if not pos.tp_levels:
+            return []
+        if pos.direction == Direction.LONG:
+            return sorted(pos.tp_levels)
+        return sorted(pos.tp_levels, reverse=True)
+
+    def _resolve_reached_tp_index(self, pos: RunningPosition, current_price: Decimal) -> int:
+        ordered = self._ordered_tp_levels(pos)
+        reached_idx = -1
+        for idx, level in enumerate(ordered):
+            if pos.direction == Direction.LONG:
+                if current_price >= level:
+                    reached_idx = idx
+                else:
+                    break
+            else:
+                if current_price <= level:
+                    reached_idx = idx
+                else:
+                    break
+        return reached_idx
+
     async def _place_partial_close_market_order(
         self, pos: RunningPosition, close_percentage: float
     ) -> tuple[bool, Decimal, Decimal]:
@@ -1093,25 +1116,41 @@ class TradeEngine:
                 f"skip pair={action.pair} reason=no_open_position",
             )
             return
-        r_multiple = await self._compute_r_multiple(pos)
-        if r_multiple is None:
+        current_price = await self._get_market_reference_price(action.pair)
+        if current_price is None:
             await self._safe_alert(
                 "notify_error",
                 "trade_engine_tp_partial",
-                f"skip pair={action.pair} reason=cannot_compute_rr",
+                f"skip pair={action.pair} reason=no_market_price",
+            )
+            return
+        reached_idx = self._resolve_reached_tp_index(pos, current_price)
+        if reached_idx < 0:
+            await self._safe_alert(
+                "notify_error",
+                "trade_engine_tp_partial",
+                f"skip pair={action.pair} reason=tp_not_reached",
+            )
+            return
+        if reached_idx <= pos.last_tp_partial_index_applied:
+            await self._safe_alert(
+                "notify_error",
+                "trade_engine_tp_partial",
+                f"skip pair={action.pair} reason=tp_level_already_processed last={pos.last_tp_partial_index_applied + 1}",
             )
             return
         new_sl: Optional[Decimal] = None
         close_percentage = 0.0
-        if r_multiple < Decimal("0.5"):
-            close_percentage = 0.0
-            new_sl = self._compute_sl_plus_from_entry(pos.direction, pos.entry_price)
-        elif r_multiple < Decimal("1.5"):
+        ordered_tp = self._ordered_tp_levels(pos)
+        if reached_idx == 0:
             close_percentage = self.PARTIAL_MEDIUM_PERCENT
-            new_sl = pos.entry_price
+            new_sl = self._compute_sl_plus_from_entry(pos.direction, pos.entry_price)
+        elif reached_idx == 1:
+            close_percentage = self.PARTIAL_MEDIUM_PERCENT
+            new_sl = ordered_tp[0]
         else:
-            close_percentage = self.PARTIAL_LARGE_PERCENT
-            new_sl = self._compute_profit_lock_sl(pos, self.PROFIT_LOCK_R) or pos.entry_price
+            close_percentage = 20.0
+            new_sl = ordered_tp[reached_idx - 1]
 
         partial_ok, closed_qty, remaining_qty = await self._place_partial_close_market_order(pos, close_percentage)
         if not partial_ok:
@@ -1127,11 +1166,13 @@ class TradeEngine:
             await self._cancel_existing_close_orders(action.pair, {"STOP_MARKET", "STOP"})
             await self._place_stop_market_order(action.pair, pos.direction, new_sl)
             await self.position_manager.update_sl(action.pair, new_sl)
+        pos.last_tp_partial_index_applied = reached_idx
         await self._safe_alert(
             "send_alert",
             "TP_PARTIAL_EXECUTED\n"
             f"pair={action.pair}\n"
-            f"rr={r_multiple:.2f}\n"
+            f"tp_reached=TP{reached_idx + 1}\n"
+            f"market_price={self._decimal_to_str(current_price)}\n"
             f"partial_close={close_percentage}%\n"
             f"closed_qty={self._decimal_to_str(closed_qty)}\n"
             f"remaining_qty={self._decimal_to_str(remaining_qty)}",
@@ -1140,7 +1181,8 @@ class TradeEngine:
             action.pair,
             "tp_partial",
             {
-                "rr_multiple": str(r_multiple),
+                "tp_reached_index": reached_idx + 1,
+                "market_price": str(current_price),
                 "close_percentage": close_percentage,
                 "sl_plus_buffer_bps": str(self.SL_PLUS_BUFFER_BPS),
                 "new_sl": str(new_sl) if new_sl is not None else None,
@@ -1151,7 +1193,8 @@ class TradeEngine:
             "tp_partial_executed",
             pair=action.pair,
             message_db_id=message_db_id,
-            rr_multiple=r_multiple,
+            tp_reached_index=reached_idx + 1,
+            market_price=current_price,
             partial_close_percent=close_percentage,
             closed_qty=closed_qty,
             remaining_qty=remaining_qty,
