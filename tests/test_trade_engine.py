@@ -5,7 +5,7 @@
 # Dependensi
 # CaraCrypto.trade_engine, CaraCrypto.models.
 # Main Functions
-# Validasi property task 11.6, seleksi entry/margin/proteksi, dan adapter Binance.
+# Validasi property task 11.6, seleksi entry/margin/proteksi, adapter Binance, dan recovery plan.
 # Side Effects
 # Tidak ada.
 
@@ -23,6 +23,9 @@ class _Client:
     def __init__(self):
         self.orders = []
         self.canceled = []
+        self.algo_orders = []
+        self.canceled_algo = []
+        self.positions = []
 
     def change_margin_type(self, **_):
         return {}
@@ -41,6 +44,13 @@ class _Client:
         self.canceled.append(kwargs)
         return {"status": "CANCELED"}
 
+    def futures_get_open_algo_orders(self, **_):
+        return self.algo_orders
+
+    def futures_cancel_algo_order(self, **kwargs):
+        self.canceled_algo.append(kwargs)
+        return {"status": "CANCELED"}
+
     def balance(self, **_):
         return [{"asset": "USDT", "availableBalance": "1000"}]
 
@@ -52,6 +62,9 @@ class _Client:
 
     def futures_leverage_bracket(self, **_):
         return []
+
+    def position_risk(self, **_):
+        return self.positions
 
 
 class _PythonBinanceClient:
@@ -87,12 +100,16 @@ class _PythonBinanceClient:
 class _DB:
     def __init__(self):
         self.logs = []
+        self.trade_plans = {}
 
     async def store_modification_log(self, pair, action_type, details, message_id):
         self.logs.append((pair, action_type, details, message_id))
 
     async def get_daily_loss(self, *_):
         return Decimal("0")
+
+    async def get_latest_trade_plan_message(self, pair):
+        return self.trade_plans.get(pair)
 
 
 class _Alert:
@@ -272,6 +289,100 @@ async def test_tp_partial_sets_sl_plus_buffer_property():
     stop_orders = [o for o in e.client.orders if o.get("type") == "STOP_MARKET"]
     assert stop_orders
     assert stop_orders[-1].get("stopPrice") == "100.1"
+
+
+@pytest.mark.asyncio
+async def test_tp_partial_recovers_exchange_position_after_restart_property():
+    e = _engine()
+    e.client.positions = [
+        {
+            "symbol": "FIGHTUSDT",
+            "positionAmt": "1000",
+            "entryPrice": "0.004044",
+            "leverage": "50",
+        }
+    ]
+    await e.execute_action(
+        TradeAction(
+            action=GeminiAction.TP_PARTIAL,
+            pair="FIGHTUSDT",
+            direction=Direction.LONG,
+            entry_price=Decimal("0.004044"),
+            take_profit_levels=[Decimal("0.00416"), Decimal("0.00435")],
+            stop_loss=Decimal("0.003777"),
+            risk_level=RiskLevel.HIGH,
+        ),
+        message_db_id=9,
+    )
+    pos = e.position_manager.get_position("FIGHTUSDT")
+    assert pos is not None
+    assert pos.quantity == Decimal("700.0")
+    assert not e.alert_service.errors
+    partial_orders = [o for o in e.client.orders if o.get("reduceOnly") == "true"]
+    assert partial_orders
+    assert partial_orders[-1]["symbol"] == "FIGHTUSDT"
+
+
+@pytest.mark.asyncio
+async def test_startup_reconcile_removes_db_position_missing_on_exchange_property():
+    e = _engine()
+    await e.position_manager.add_position(
+        RunningPosition("FIGHTUSDT", Direction.LONG, Decimal("100"), Decimal("90"), [Decimal("110")], 50, "1", Decimal("0.1"), datetime.utcnow())
+    )
+    result = await e.reconcile_positions_with_exchange()
+    assert result["removed"] == ["FIGHTUSDT"]
+    assert not e.position_manager.has_position("FIGHTUSDT")
+    assert ("FIGHTUSDT", "startup_reconcile_closed", {"source": "binance_absent"}, None) in e.db.logs
+
+
+@pytest.mark.asyncio
+async def test_startup_reconcile_recovers_exchange_position_missing_in_db_property():
+    e = _engine()
+    e.client.positions = [
+        {
+            "symbol": "FIGHTUSDT",
+            "positionAmt": "1000",
+            "entryPrice": "0.004044",
+            "leverage": "50",
+        }
+    ]
+    result = await e.reconcile_positions_with_exchange()
+    pos = e.position_manager.get_position("FIGHTUSDT")
+    assert result["recovered"] == ["FIGHTUSDT"]
+    assert pos is not None
+    assert pos.quantity == Decimal("1000")
+    assert pos.entry_price == Decimal("0.004044")
+
+
+@pytest.mark.asyncio
+async def test_startup_reconcile_recovers_trade_plan_from_message_json_property():
+    e = _engine()
+    e.client.positions = [
+        {
+            "symbol": "FIGHTUSDT",
+            "positionAmt": "1000",
+            "entryPrice": "0.004044",
+            "leverage": "50",
+        }
+    ]
+    e.db.trade_plans["FIGHTUSDT"] = {
+        "id": 42,
+        "extracted_data": {
+            "action": "new_signal",
+            "pair": "FIGHTUSDT",
+            "direction": "long",
+            "take_profit_levels": ["0.0045", "0.0050", "0.0039"],
+            "stop_loss": "0.0038",
+        },
+    }
+    result = await e.reconcile_positions_with_exchange()
+    pos = e.position_manager.get_position("FIGHTUSDT")
+    assert result["recovered"] == ["FIGHTUSDT"]
+    assert pos is not None
+    assert pos.message_db_id == 42
+    assert pos.current_sl == Decimal("0.0038")
+    assert pos.tp_levels == [Decimal("0.0045"), Decimal("0.0050")]
+    assert e.db.logs[-1][3] == 42
 
 
 @pytest.mark.asyncio
@@ -518,3 +629,28 @@ async def test_initial_tp_sl_logs_without_modification_whatsapp_property():
     assert e.alert_service.protections == [("PROMPTUSDT", "110", "90", "engine")]
     assert ("PROMPTUSDT", "set_tp", {"final_tp": "110"}, 42) in e.db.logs
     assert ("PROMPTUSDT", "set_sl", {"stop_loss": "90"}, 42) in e.db.logs
+
+
+@pytest.mark.asyncio
+async def test_set_tp_sl_cleans_existing_algo_protection_orders_property():
+    e = _engine()
+    e.client.algo_orders = [
+        {"algoId": 88, "type": "TAKE_PROFIT_MARKET"},
+        {"clientAlgoId": "sl-client-1", "origType": "STOP_MARKET"},
+    ]
+    pos = RunningPosition(
+        "PROMPTUSDT",
+        Direction.LONG,
+        Decimal("100"),
+        Decimal("90"),
+        [Decimal("110")],
+        50,
+        "entry-1",
+        Decimal("0.2"),
+        datetime.utcnow(),
+        message_db_id=42,
+    )
+    await e._set_tp_sl_orders(pos)
+    assert {"symbol": "PROMPTUSDT", "algoId": 88} in e.client.canceled_algo
+    assert {"symbol": "PROMPTUSDT", "clientAlgoId": "sl-client-1"} in e.client.canceled_algo
+    assert [o["type"] for o in e.client.orders[-2:]] == ["TAKE_PROFIT_MARKET", "STOP_MARKET"]

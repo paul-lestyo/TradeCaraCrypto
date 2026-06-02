@@ -5,7 +5,7 @@
 # Dependensi
 # SQLAlchemy async.
 # Main Functions
-# insert/update message, posisi aktif, log modifikasi.
+# insert/update message, lookup trade plan OCR, posisi aktif, log modifikasi.
 # Side Effects
 # Operasi baca/tulis PostgreSQL.
 
@@ -15,10 +15,12 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, String, Text, UniqueConstraint, select
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint, delete, select, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+from .models import Direction, RunningPosition
 
 
 class Base(DeclarativeBase):
@@ -54,6 +56,23 @@ class ModificationLogModel(Base):
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class RunningPositionModel(Base):
+    __tablename__ = "running_positions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    pair: Mapped[str] = mapped_column(String(32), unique=True)
+    direction: Mapped[str] = mapped_column(String(16))
+    entry_price: Mapped[Decimal] = mapped_column(Numeric(30, 10))
+    current_sl: Mapped[Optional[Decimal]] = mapped_column(Numeric(30, 10), nullable=True)
+    tp_levels: Mapped[Optional[list[str]]] = mapped_column(JSONB, nullable=True)
+    leverage: Mapped[int] = mapped_column()
+    order_id: Mapped[str] = mapped_column(String(128))
+    quantity: Mapped[Decimal] = mapped_column(Numeric(30, 10))
+    message_id: Mapped[Optional[int]] = mapped_column(ForeignKey("messages.id"), nullable=True)
+    opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(16), default="running")
+
+
 class Database:
     def __init__(self, database_url: str):
         self.engine = create_async_engine(database_url, future=True)
@@ -62,6 +81,10 @@ class Database:
     async def connect(self) -> None:
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+            if conn.dialect.name == "postgresql":
+                await conn.execute(
+                    text("ALTER TABLE running_positions ADD COLUMN IF NOT EXISTS status VARCHAR(16) NOT NULL DEFAULT 'running'")
+                )
 
     async def store_message(self, payload: Dict[str, Any]) -> int:
         now = datetime.now(timezone.utc)
@@ -134,6 +157,127 @@ class Database:
                 }
                 for r in rows
             ]
+
+    async def get_latest_trade_plan_message(self, pair: str, limit: int = 1) -> Optional[Dict[str, Any]]:
+        normalized_pair = str(pair or "").strip().upper().replace("/", "").replace(" ", "")
+        if not normalized_pair:
+            return None
+        pair_values = {normalized_pair}
+        if normalized_pair.endswith("USDT") and len(normalized_pair) > 4:
+            pair_values.add(f"{normalized_pair[:-4]}/USDT")
+        async with self.session_factory() as session:
+            q = (
+                select(MessageModel)
+                .where(MessageModel.gemini_action.in_(["new_signal", "re_entry"]))
+                .where(MessageModel.extracted_data["pair"].astext.in_(sorted(pair_values)))
+                .order_by(MessageModel.processed_at.desc().nullslast(), MessageModel.received_at.desc())
+                .limit(limit)
+            )
+            row = (await session.execute(q)).scalars().first()
+            if not row:
+                return None
+            return {
+                "id": row.id,
+                "message_id": row.message_id,
+                "extracted_data": row.extracted_data or {},
+                "gemini_action": row.gemini_action,
+                "received_at": row.received_at,
+                "processed_at": row.processed_at,
+            }
+
+    @staticmethod
+    def _position_to_model_values(position: RunningPosition, status: str) -> Dict[str, Any]:
+        return {
+            "pair": position.pair,
+            "direction": position.direction.value,
+            "entry_price": position.entry_price,
+            "current_sl": position.current_sl,
+            "tp_levels": [str(level) for level in position.tp_levels],
+            "leverage": position.leverage,
+            "order_id": position.order_id,
+            "quantity": position.quantity,
+            "message_id": position.message_db_id,
+            "opened_at": position.opened_at,
+            "status": status,
+        }
+
+    @staticmethod
+    def _model_to_position(row: RunningPositionModel) -> RunningPosition:
+        return RunningPosition(
+            pair=row.pair,
+            direction=Direction(row.direction),
+            entry_price=Decimal(str(row.entry_price)),
+            current_sl=Decimal(str(row.current_sl)) if row.current_sl is not None else None,
+            tp_levels=[Decimal(str(level)) for level in (row.tp_levels or [])],
+            leverage=row.leverage,
+            order_id=row.order_id,
+            quantity=Decimal(str(row.quantity)),
+            opened_at=row.opened_at,
+            message_db_id=row.message_id,
+        )
+
+    async def get_positions(self, status: Optional[str] = None) -> List[RunningPosition]:
+        async with self.session_factory() as session:
+            q = select(RunningPositionModel)
+            if status is not None:
+                q = q.where(RunningPositionModel.status == status)
+            rows = (await session.execute(q)).scalars().all()
+            return [self._model_to_position(row) for row in rows]
+
+    async def get_running_positions(self) -> List[RunningPosition]:
+        return await self.get_positions("running")
+
+    async def get_pending_positions(self) -> List[RunningPosition]:
+        return await self.get_positions("pending")
+
+    async def store_position(self, position: RunningPosition, status: str = "running") -> None:
+        values = self._position_to_model_values(position, status)
+        async with self.session_factory() as session:
+            q = select(RunningPositionModel).where(RunningPositionModel.pair == position.pair)
+            row = (await session.execute(q)).scalars().first()
+            if row is None:
+                session.add(RunningPositionModel(**values))
+            else:
+                for key, value in values.items():
+                    setattr(row, key, value)
+            await session.commit()
+
+    async def remove_position(self, pair: str) -> None:
+        async with self.session_factory() as session:
+            await session.execute(delete(RunningPositionModel).where(RunningPositionModel.pair == pair))
+            await session.commit()
+
+    async def update_position_sl(self, pair: str, new_sl: Optional[Decimal]) -> None:
+        async with self.session_factory() as session:
+            q = select(RunningPositionModel).where(RunningPositionModel.pair == pair)
+            row = (await session.execute(q)).scalars().first()
+            if row:
+                row.current_sl = new_sl
+                await session.commit()
+
+    async def update_position_tp(self, pair: str, tp_levels) -> None:
+        async with self.session_factory() as session:
+            q = select(RunningPositionModel).where(RunningPositionModel.pair == pair)
+            row = (await session.execute(q)).scalars().first()
+            if row:
+                row.tp_levels = [str(level) for level in tp_levels]
+                await session.commit()
+
+    async def update_position_quantity(self, pair: str, new_qty: Decimal) -> None:
+        async with self.session_factory() as session:
+            q = select(RunningPositionModel).where(RunningPositionModel.pair == pair)
+            row = (await session.execute(q)).scalars().first()
+            if row:
+                row.quantity = new_qty
+                await session.commit()
+
+    async def update_position_status(self, pair: str, status: str) -> None:
+        async with self.session_factory() as session:
+            q = select(RunningPositionModel).where(RunningPositionModel.pair == pair)
+            row = (await session.execute(q)).scalars().first()
+            if row:
+                row.status = status
+                await session.commit()
 
     async def get_daily_loss(self, day_start: datetime) -> Decimal:
         async with self.session_factory() as session:

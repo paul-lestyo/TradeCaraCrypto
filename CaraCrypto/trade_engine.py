@@ -5,7 +5,7 @@
 # Dependensi
 # python-binance, position_manager, alert_service.
 # Main Functions
-# `execute_action`, seleksi entry/sizing direction-aware, dan handler proteksi.
+# `execute_action`, startup reconcile + plan restore, seleksi entry/sizing direction-aware, recovery posisi exchange, cleanup algo protection order, dan handler proteksi.
 # Side Effects
 # Menempatkan/cancel/close order di Binance.
 
@@ -525,31 +525,56 @@ class TradeEngine:
             return Decimal("0")
         return max((entry_price * qty) / Decimal(leverage), Decimal("0"))
 
-    def _extract_running_pairs_from_payload(self, payload: Any) -> set[str]:
-        positions: list[dict[str, Any]] = []
+    def _extract_position_payloads(self, payload: Any) -> list[dict[str, Any]]:
         if isinstance(payload, dict):
             candidate = payload.get("positions")
             if isinstance(candidate, SequenceABC) and not isinstance(candidate, (str, bytes)):
-                positions = [p for p in candidate if isinstance(p, dict)]
+                return [p for p in candidate if isinstance(p, dict)]
             elif "symbol" in payload and ("positionAmt" in payload or "position_amount" in payload):
-                positions = [payload]
+                return [payload]
         elif isinstance(payload, SequenceABC) and not isinstance(payload, (str, bytes)):
-            positions = [p for p in payload if isinstance(p, dict)]
+            return [p for p in payload if isinstance(p, dict)]
+        return []
+
+    @staticmethod
+    def _position_amount(position: dict[str, Any]) -> Optional[Decimal]:
+        raw_amt = position.get("positionAmt", position.get("position_amount", position.get("qty")))
+        try:
+            return Decimal(str(raw_amt))
+        except Exception:
+            return None
+
+    def _extract_running_pairs_from_payload(self, payload: Any) -> set[str]:
         running_pairs: set[str] = set()
-        for pos in positions:
+        for pos in self._extract_position_payloads(payload):
             symbol = self._normalize_pair(pos.get("symbol"))
             if not symbol:
                 continue
-            raw_amt = pos.get("positionAmt", pos.get("position_amount", pos.get("qty")))
-            try:
-                amt = Decimal(str(raw_amt))
-            except Exception:
+            amt = self._position_amount(pos)
+            if amt is None:
                 continue
             if amt.copy_abs() > 0:
                 running_pairs.add(symbol)
         return running_pairs
 
-    def _get_binance_running_pairs(self) -> Optional[set[str]]:
+    def _extract_running_position_payloads_from_payload(self, payload: Any) -> dict[str, dict[str, Any]]:
+        running_positions: dict[str, dict[str, Any]] = {}
+        for pos in self._extract_position_payloads(payload):
+            symbol = self._normalize_pair(pos.get("symbol"))
+            if not symbol:
+                continue
+            amt = self._position_amount(pos)
+            if amt is not None and amt.copy_abs() > 0:
+                running_positions[symbol] = pos
+        return running_positions
+
+    def _has_binance_position_method(self) -> bool:
+        return any(
+            callable(getattr(self.client, method_name, None))
+            for method_name in ("position_risk", "futures_position_information", "futures_account", "account")
+        )
+
+    def _get_binance_running_position_payloads(self) -> Optional[dict[str, dict[str, Any]]]:
         methods = (
             "position_risk",
             "futures_position_information",
@@ -557,10 +582,12 @@ class TradeEngine:
             "account",
         )
         last_error: Optional[str] = None
+        method_seen = False
         for method_name in methods:
             fn = getattr(self.client, method_name, None)
             if not callable(fn):
                 continue
+            method_seen = True
             try:
                 payload = fn()
             except TypeError:
@@ -572,16 +599,59 @@ class TradeEngine:
             except Exception as exc:
                 last_error = f"{method_name}: {exc}"
                 continue
-            return self._extract_running_pairs_from_payload(payload)
+            return self._extract_running_position_payloads_from_payload(payload)
         if last_error:
             return None
-        pm_running = getattr(self.position_manager, "get_running_pairs", None)
-        if callable(pm_running):
-            try:
-                return {self._normalize_pair(p) for p in pm_running() if self._normalize_pair(p)}
-            except Exception:
-                pass
-        return set()
+        if not method_seen:
+            return None
+        return {}
+
+    def _get_binance_position_payload(self, pair: str) -> Optional[dict[str, Any]]:
+        normalized_pair = self._normalize_pair(pair)
+        if not normalized_pair:
+            return None
+        methods = (
+            "position_risk",
+            "futures_position_information",
+            "futures_account",
+            "account",
+        )
+        for method_name in methods:
+            fn = getattr(self.client, method_name, None)
+            if not callable(fn):
+                continue
+            for kwargs in ({"symbol": normalized_pair}, {}, {"recvWindow": 5000}):
+                try:
+                    payload = fn(**kwargs)
+                    break
+                except TypeError:
+                    continue
+                except Exception:
+                    payload = None
+                    break
+            else:
+                payload = None
+            if payload is None:
+                continue
+            for pos in self._extract_position_payloads(payload):
+                symbol = self._normalize_pair(pos.get("symbol"))
+                amt = self._position_amount(pos)
+                if symbol == normalized_pair and amt is not None and amt.copy_abs() > 0:
+                    return pos
+        return None
+
+    def _get_binance_running_pairs(self) -> Optional[set[str]]:
+        running_payloads = self._get_binance_running_position_payloads()
+        if running_payloads is None:
+            if not self._has_binance_position_method():
+                pm_running = getattr(self.position_manager, "get_running_pairs", None)
+                if callable(pm_running):
+                    try:
+                        return {self._normalize_pair(p) for p in pm_running() if self._normalize_pair(p)}
+                    except Exception:
+                        pass
+            return None
+        return set(running_payloads.keys())
 
     def _get_binance_open_order_pairs(self) -> Optional[set[str]]:
         methods = (
@@ -926,7 +996,241 @@ class TradeEngine:
             return False
         return pair in running_pairs
 
-    async def _resolve_open_position(self, pair: str) -> Optional[RunningPosition]:
+    @staticmethod
+    def _position_decimal(position: dict[str, Any], *keys: str) -> Optional[Decimal]:
+        for key in keys:
+            value = position.get(key)
+            if value is None:
+                continue
+            try:
+                return Decimal(str(value))
+            except Exception:
+                continue
+        return None
+
+    def _recover_position_direction(self, position: dict[str, Any], fallback: Optional[Direction]) -> Optional[Direction]:
+        amt = self._position_amount(position)
+        if amt is not None:
+            if amt > 0:
+                return Direction.LONG
+            if amt < 0:
+                return Direction.SHORT
+        return fallback
+
+    def _recover_position_entry(self, position: dict[str, Any], action: TradeAction) -> Optional[Decimal]:
+        entry = self._position_decimal(position, "entryPrice", "entry_price", "breakEvenPrice")
+        if entry is not None and entry > 0:
+            return entry
+        if action.entry_price is not None:
+            return action.entry_price
+        if action.entry_zone:
+            return sum(action.entry_zone) / Decimal(len(action.entry_zone))
+        return None
+
+    @staticmethod
+    def _decimal_from_payload(payload: dict[str, Any], key: str) -> Optional[Decimal]:
+        value = payload.get(key)
+        if value is None or value == "":
+            return None
+        try:
+            return Decimal(str(value))
+        except Exception:
+            return None
+
+    @staticmethod
+    def _decimal_list_from_payload(payload: dict[str, Any], key: str) -> list[Decimal]:
+        value = payload.get(key)
+        if not isinstance(value, SequenceABC) or isinstance(value, (str, bytes)):
+            return []
+        levels: list[Decimal] = []
+        for item in value:
+            try:
+                levels.append(Decimal(str(item)))
+            except Exception:
+                continue
+        return levels
+
+    def _direction_from_payload(self, payload: dict[str, Any]) -> Optional[Direction]:
+        raw_direction = payload.get("direction")
+        if raw_direction is None:
+            return None
+        try:
+            return Direction(str(raw_direction).strip().lower())
+        except Exception:
+            return None
+
+    @staticmethod
+    def _sl_matches_direction(direction: Direction, entry_price: Decimal, stop_loss: Decimal) -> bool:
+        if direction == Direction.LONG:
+            return stop_loss < entry_price
+        return stop_loss > entry_price
+
+    @staticmethod
+    def _tp_matches_direction(direction: Direction, entry_price: Decimal, tp_level: Decimal) -> bool:
+        if direction == Direction.LONG:
+            return tp_level > entry_price
+        return tp_level < entry_price
+
+    def _build_recovery_action_from_plan(
+        self,
+        pair: str,
+        position_payload: dict[str, Any],
+        plan_payload: dict[str, Any],
+    ) -> Optional[TradeAction]:
+        direction = self._recover_position_direction(position_payload, None)
+        entry_price = self._position_decimal(position_payload, "entryPrice", "entry_price", "breakEvenPrice")
+        if direction is None or entry_price is None or entry_price <= 0:
+            return None
+        plan_direction = self._direction_from_payload(plan_payload)
+        if plan_direction is not None and plan_direction != direction:
+            return None
+        stop_loss = self._decimal_from_payload(plan_payload, "stop_loss")
+        if stop_loss is not None and not self._sl_matches_direction(direction, entry_price, stop_loss):
+            stop_loss = None
+        tp_levels = [
+            level
+            for level in self._decimal_list_from_payload(plan_payload, "take_profit_levels")
+            if self._tp_matches_direction(direction, entry_price, level)
+        ]
+        return TradeAction(
+            action=GeminiAction.NEW_SIGNAL,
+            pair=pair,
+            direction=direction,
+            entry_price=entry_price,
+            take_profit_levels=tp_levels or None,
+            stop_loss=stop_loss,
+            raw_response=plan_payload,
+        )
+
+    async def _get_recovery_plan_from_messages(
+        self,
+        pair: str,
+        position_payload: dict[str, Any],
+    ) -> tuple[Optional[TradeAction], Optional[int]]:
+        get_plan = getattr(self.db, "get_latest_trade_plan_message", None)
+        if not callable(get_plan):
+            return None, None
+        try:
+            plan_row = await get_plan(pair)
+        except Exception as exc:
+            self._write_audit_log("startup_recovery_plan_lookup_failed", pair=pair, error=str(exc))
+            return None, None
+        if not plan_row:
+            return None, None
+        plan_payload = plan_row.get("extracted_data") or {}
+        if not isinstance(plan_payload, dict):
+            return None, plan_row.get("id")
+        action = self._build_recovery_action_from_plan(pair, position_payload, plan_payload)
+        return action, plan_row.get("id")
+
+    def _build_recovered_position(
+        self,
+        pair: str,
+        position_payload: dict[str, Any],
+        action: Optional[TradeAction] = None,
+        message_db_id: Optional[int] = None,
+    ) -> Optional[RunningPosition]:
+        direction = self._recover_position_direction(position_payload, action.direction if action else None)
+        entry_price = (
+            self._recover_position_entry(position_payload, action)
+            if action
+            else self._position_decimal(position_payload, "entryPrice", "entry_price", "breakEvenPrice")
+        )
+        qty = self._position_amount(position_payload)
+        if not direction or entry_price is None or entry_price <= 0 or qty is None or qty.copy_abs() <= 0:
+            return None
+        leverage_raw = position_payload.get("leverage")
+        try:
+            leverage = int(Decimal(str(leverage_raw)))
+        except Exception:
+            leverage = self.get_leverage(pair)
+        return RunningPosition(
+            pair=pair,
+            direction=direction,
+            entry_price=entry_price,
+            current_sl=action.stop_loss if action else None,
+            tp_levels=action.take_profit_levels or [] if action else [],
+            leverage=leverage,
+            order_id=f"recovered-{pair}-{int(datetime.now(timezone.utc).timestamp())}",
+            quantity=qty.copy_abs(),
+            opened_at=datetime.now(timezone.utc),
+            message_db_id=message_db_id,
+        )
+
+    async def _recover_open_position_from_exchange(
+        self,
+        action: TradeAction,
+        message_db_id: Optional[int] = None,
+    ) -> Optional[RunningPosition]:
+        if not action.pair:
+            return None
+        pair = self._normalize_pair(action.pair)
+        position_payload = self._get_binance_position_payload(pair)
+        if not position_payload:
+            return None
+        pos = self._build_recovered_position(pair, position_payload, action, message_db_id)
+        if not pos:
+            return None
+        await self.position_manager.add_position(pos)
+        self._write_audit_log(
+            "position_recovered_from_exchange",
+            pair=pair,
+            message_db_id=message_db_id,
+            side=pos.direction.value,
+            entry_price=pos.entry_price,
+            quantity=pos.quantity,
+            leverage=pos.leverage,
+            source_action=action.action.value,
+        )
+        return pos
+
+    async def reconcile_positions_with_exchange(self) -> dict[str, list[str]]:
+        exchange_positions = self._get_binance_running_position_payloads()
+        if exchange_positions is None:
+            await self._safe_alert("notify_error", "trade_engine_reconcile", "cannot verify running positions from Binance API")
+            return {"removed": [], "recovered": [], "kept": []}
+        local_pairs = set()
+        get_running_pairs = getattr(self.position_manager, "get_running_pairs", None)
+        if callable(get_running_pairs):
+            local_pairs = {self._normalize_pair(pair) for pair in get_running_pairs() if self._normalize_pair(pair)}
+        exchange_pairs = set(exchange_positions.keys())
+        removed: list[str] = []
+        recovered: list[str] = []
+        kept = sorted(local_pairs & exchange_pairs)
+        for pair in sorted(local_pairs - exchange_pairs):
+            await self.position_manager.remove_position(pair)
+            removed.append(pair)
+            await self.db.store_modification_log(pair, "startup_reconcile_closed", {"source": "binance_absent"}, None)
+        for pair in sorted(exchange_pairs - local_pairs):
+            plan_action, plan_message_id = await self._get_recovery_plan_from_messages(pair, exchange_positions[pair])
+            pos = self._build_recovered_position(pair, exchange_positions[pair], plan_action, plan_message_id)
+            if not pos:
+                continue
+            await self.position_manager.add_position(pos)
+            recovered.append(pair)
+            await self.db.store_modification_log(
+                pair,
+                "startup_reconcile_recovered",
+                {
+                    "entry_price": str(pos.entry_price),
+                    "quantity": str(pos.quantity),
+                    "direction": pos.direction.value,
+                    "message_id": plan_message_id,
+                    "plan_restored": plan_action is not None,
+                    "stop_loss": str(pos.current_sl) if pos.current_sl is not None else None,
+                    "take_profit_levels": [str(level) for level in pos.tp_levels],
+                },
+                plan_message_id,
+            )
+        self._write_audit_log("startup_reconcile_positions", removed=removed, recovered=recovered, kept=kept)
+        return {"removed": removed, "recovered": recovered, "kept": kept}
+
+    async def _resolve_open_position(
+        self,
+        pair: str,
+        action: Optional[TradeAction] = None,
+        message_db_id: Optional[int] = None,
+    ) -> Optional[RunningPosition]:
         pos = self.position_manager.get_position(pair)
         if pos:
             return pos
@@ -934,12 +1238,18 @@ class TradeEngine:
             return None
         promote_pending = getattr(self.position_manager, "promote_pending_position", None)
         if callable(promote_pending):
-            return await promote_pending(pair)
+            pos = await promote_pending(pair)
+            if pos:
+                return pos
+        if action is not None:
+            return await self._recover_open_position_from_exchange(action, message_db_id)
         return self.position_manager.get_position(pair)
 
     async def _set_tp_sl_orders(self, pos: RunningPosition, message_db_id: Optional[int] = None) -> None:
         final_tp: Optional[Decimal] = None
         log_message_id = message_db_id if message_db_id is not None else pos.message_db_id
+        if pos.tp_levels or pos.current_sl is not None:
+            await self._cleanup_protection_orders(pos.pair)
         if pos.tp_levels:
             final_tp = self._get_final_tp_level(pos.direction, pos.tp_levels)
             await self._place_take_profit_market_order(pos.pair, pos.direction, final_tp)
@@ -975,6 +1285,18 @@ class TradeEngine:
             return self.client.get_open_orders(symbol=pair)
         return []
 
+    def _get_open_algo_orders(self, pair: str) -> Sequence[dict]:
+        if not hasattr(self.client, "futures_get_open_algo_orders"):
+            return []
+        response = self.client.futures_get_open_algo_orders(symbol=pair)
+        if isinstance(response, dict):
+            for key in ("orders", "algoOrders", "data"):
+                value = response.get(key)
+                if isinstance(value, list):
+                    return value
+            return []
+        return response if isinstance(response, list) else []
+
     def _cancel_order(self, pair: str, order_id: Any) -> None:
         if hasattr(self.client, "futures_cancel_order"):
             self.client.futures_cancel_order(symbol=pair, orderId=order_id)
@@ -982,15 +1304,43 @@ class TradeEngine:
         if hasattr(self.client, "cancel_order"):
             self.client.cancel_order(symbol=pair, orderId=order_id)
 
+    def _cancel_algo_order(self, pair: str, order: dict) -> None:
+        if not hasattr(self.client, "futures_cancel_algo_order"):
+            return
+        algo_id = order.get("algoId")
+        client_algo_id = order.get("clientAlgoId")
+        if algo_id is not None:
+            self.client.futures_cancel_algo_order(symbol=pair, algoId=algo_id)
+        elif client_algo_id is not None:
+            self.client.futures_cancel_algo_order(symbol=pair, clientAlgoId=client_algo_id)
+
+    @staticmethod
+    def _open_order_type(order: dict) -> str | None:
+        for key in ("type", "origType", "orderType"):
+            value = order.get(key)
+            if value:
+                return str(value)
+        return None
+
     async def _cancel_existing_close_orders(self, pair: str, order_types: set[str]) -> None:
         try:
             open_orders = self._get_open_orders(pair)
         except Exception:
-            return
+            open_orders = []
         for order in open_orders:
-            if order.get("type") in order_types:
+            if self._open_order_type(order) in order_types:
                 try:
                     self._cancel_order(pair, order.get("orderId"))
+                except Exception:
+                    continue
+        try:
+            open_algo_orders = self._get_open_algo_orders(pair)
+        except Exception:
+            return
+        for order in open_algo_orders:
+            if self._open_order_type(order) in order_types:
+                try:
+                    self._cancel_algo_order(pair, order)
                 except Exception:
                     continue
 
@@ -1046,7 +1396,7 @@ class TradeEngine:
     async def _handle_set_sl_breakeven(self, action: TradeAction, message_db_id: Optional[int]) -> None:
         if not action.pair:
             return
-        pos = await self._resolve_open_position(action.pair)
+        pos = await self._resolve_open_position(action.pair, action, message_db_id)
         if not pos:
             await self._safe_alert(
                 "notify_error",
@@ -1108,7 +1458,7 @@ class TradeEngine:
     async def _handle_tp_partial(self, action: TradeAction, message_db_id: Optional[int]) -> None:
         if not action.pair:
             return
-        pos = await self._resolve_open_position(action.pair)
+        pos = await self._resolve_open_position(action.pair, action, message_db_id)
         if not pos:
             await self._safe_alert(
                 "notify_error",

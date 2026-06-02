@@ -5,7 +5,7 @@
 # Dependensi
 # Semua module internal + Binance client.
 # Main Functions
-# `main()`, loop pemrosesan signal, dan subscribe watcher pasca eksekusi order.
+# `main()`, startup reconcile posisi, loop pemrosesan signal, dan subscribe watcher pasca eksekusi order.
 # Side Effects
 # Menjalankan koneksi DB, Telegram, dan network service.
 
@@ -27,7 +27,7 @@ from .alert_service import AlertService
 from .config import load_config
 from .context_builder import ContextBuilder
 from .database import Database
-from .models import GeminiAction
+from .models import GeminiAction, TradeAction
 from .position_manager import PositionManager
 from .price_watcher import PriceWatcher
 from .signal_listener import SignalListener
@@ -73,6 +73,17 @@ async def _subscribe_watcher(watcher, pair, action):
         await watcher.subscribe(pair, action)
     except TypeError:
         await watcher.subscribe(pair)
+
+
+async def _restore_watcher_subscriptions(watcher, position_manager) -> None:
+    for pos in position_manager.get_running_positions():
+        await _subscribe_watcher(watcher, pos.pair, None)
+    get_pending_positions = getattr(position_manager, "get_pending_positions", None)
+    pending_positions = get_pending_positions() if callable(get_pending_positions) else []
+    for pos in pending_positions:
+        action = TradeAction(action=GeminiAction.NEW_SIGNAL, pair=pos.pair)
+        watcher.register_pending_order(str(pos.order_id), action)
+        await _subscribe_watcher(watcher, pos.pair, action)
 
 
 async def _process_one_signal(raw, db, context_builder, parser, engine, watcher):
@@ -181,6 +192,12 @@ async def main() -> None:
     watcher.trade_engine = engine
     engine.price_watcher = watcher
     print("[Main] Watcher wired to engine")
+    reconcile = await engine.reconcile_positions_with_exchange()
+    print(
+        "[Main] Startup reconcile "
+        f"kept={reconcile['kept']} recovered={reconcile['recovered']} removed={reconcile['removed']}"
+    )
+    await _restore_watcher_subscriptions(watcher, position_manager)
 
     listener = SignalListener(cfg.telegram, db, alert_service, queue)
     print("[Main] Services initialized.")

@@ -17,14 +17,15 @@
 2. `database.py` menyimpan row `messages` sebelum Gemini.
 3. `context_builder.py` menyiapkan konteks (history + position state).
 4. `signal_parser.py` single-call Gemini (extract + classify), lalu update row yang sama.
-5. `trade_engine.py` memvalidasi aksi executable lalu mengeksekusi aksi non-skip ke Binance dengan dispatch action, risk checks, sizing, TP/SL safety order, dan queue sederhana saat limit posisi tercapai.
-6. `price_watcher.py` monitor harga + user data stream untuk fill/closure setelah pipeline subscribe hanya pada order yang diterima engine.
-7. `alert_service.py` kirim notifikasi WhatsApp.
+5. Startup melakukan reconcile `running_positions` DB dengan running position Binance, restore TP/SL plan dari `messages.extracted_data` jika DB posisi hilang, lalu restore subscription watcher untuk posisi `running`/`pending`.
+6. `trade_engine.py` memvalidasi aksi executable lalu mengeksekusi aksi non-skip ke Binance dengan dispatch action, risk checks, sizing, recovery state posisi dari DB/Binance setelah restart, TP/SL safety order, dan queue sederhana saat limit posisi tercapai.
+7. `price_watcher.py` monitor harga + user data stream untuk fill/closure setelah pipeline subscribe hanya pada order yang diterima engine atau direstore dari DB saat startup.
+8. `alert_service.py` kirim notifikasi WhatsApp.
 
 ## Data Access
 - `database.py` mengelola 3 tabel:
   - `messages`
-  - `running_positions`
+  - `running_positions` sebagai source of truth posisi strategi bot (`running`/`pending`)
   - `modification_logs`
 
 ## Konfigurasi

@@ -36,6 +36,8 @@
 - `quantity` NUMERIC(30, 10) NOT NULL
 - `message_id` BIGINT NULL FK -> messages.id
 - `opened_at` TIMESTAMPTZ NOT NULL
+- `status` VARCHAR(16) NOT NULL DEFAULT `running`
+- Status values: `running`, `pending`
 
 ## modification_logs
 - `id` BIGSERIAL PK

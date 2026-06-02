@@ -20,17 +20,32 @@ from CaraCrypto.position_manager import PositionManager
 
 class _DB:
     def __init__(self):
-        self.positions = []
+        self.positions = {}
 
     async def get_running_positions(self):
-        return self.positions
+        return [pos for pos, status in self.positions.values() if status == "running"]
 
-    async def store_position(self, position):
-        self.positions = [p for p in self.positions if p.pair != position.pair]
-        self.positions.append(position)
+    async def get_pending_positions(self):
+        return [pos for pos, status in self.positions.values() if status == "pending"]
+
+    async def store_position(self, position, status="running"):
+        self.positions[position.pair] = (position, status)
 
     async def remove_position(self, pair):
-        self.positions = [p for p in self.positions if p.pair != pair]
+        self.positions.pop(pair, None)
+
+    async def update_position_status(self, pair, status):
+        pos, _ = self.positions[pair]
+        self.positions[pair] = (pos, status)
+
+    async def update_position_sl(self, pair, new_sl):
+        self.positions[pair][0].current_sl = new_sl
+
+    async def update_position_tp(self, pair, tp_levels):
+        self.positions[pair][0].tp_levels = list(tp_levels)
+
+    async def update_position_quantity(self, pair, new_qty):
+        self.positions[pair][0].quantity = new_qty
 
 
 def _pos(pair="BTCUSDT"):
@@ -58,6 +73,31 @@ async def test_position_state_consistency_property():
     await pm.remove_position("BTCUSDT")
     assert not pm.has_position("BTCUSDT")
     assert "BTCUSDT" in pm.get_closed_today()
+    assert "BTCUSDT" not in db.positions
+
+
+@pytest.mark.asyncio
+async def test_initialize_reloads_positions_from_db_property():
+    db = _DB()
+    await db.store_position(_pos("FIGHTUSDT"), status="running")
+    await db.store_position(_pos("PHAUSDT"), status="pending")
+    pm = PositionManager(db)
+    await pm.initialize()
+    assert pm.has_position("FIGHTUSDT")
+    assert pm.has_pending_position("PHAUSDT")
+
+
+@pytest.mark.asyncio
+async def test_pending_promotion_persists_running_status_property():
+    db = _DB()
+    pm = PositionManager(db)
+    await pm.initialize()
+    await pm.add_pending_position(_pos("PHAUSDT"))
+    promoted = await pm.promote_pending_position("PHAUSDT")
+    assert promoted is not None
+    assert pm.has_position("PHAUSDT")
+    assert not pm.has_pending_position("PHAUSDT")
+    assert db.positions["PHAUSDT"][1] == "running"
 
 
 @pytest.mark.asyncio
