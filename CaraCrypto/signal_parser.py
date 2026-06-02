@@ -168,18 +168,34 @@ class SignalParser:
         if not text:
             return None
         patterns = (
-            r"\bSL\b[^\d+-]{0,30}([0-9]+(?:[.,][0-9]+)?)",
-            r"\bstop\s*loss\b[^\d+-]{0,30}([0-9]+(?:[.,][0-9]+)?)",
+            r"\bSL\b[^\d+-]{0,30}([0-9]+(?:[.,][0-9]+)?(?:\s*[KMB])?)",
+            r"\bstop\s*loss\b[^\d+-]{0,30}([0-9]+(?:[.,][0-9]+)?(?:\s*[KMB])?)",
         )
         for pattern in patterns:
             match = re.search(pattern, text, flags=re.IGNORECASE)
             if not match:
                 continue
-            try:
-                return Decimal(match.group(1).replace(",", "."))
-            except Exception:
-                return None
+            return self._parse_numeric_token(match.group(1))
         return None
+
+    def _parse_numeric_token(self, token: Optional[str]) -> Optional[Decimal]:
+        if not token:
+            return None
+        raw = str(token).strip().upper().replace(" ", "")
+        multiplier = Decimal("1")
+        suffix = raw[-1:] if raw else ""
+        if suffix in {"K", "M", "B"}:
+            raw = raw[:-1]
+            multiplier = {
+                "K": Decimal("1000"),
+                "M": Decimal("1000000"),
+                "B": Decimal("1000000000"),
+            }[suffix]
+        try:
+            value = Decimal(raw.replace(",", "."))
+        except Exception:
+            return None
+        return value * multiplier
 
     def _has_now_market_override(self, text: Optional[str]) -> bool:
         if not text:

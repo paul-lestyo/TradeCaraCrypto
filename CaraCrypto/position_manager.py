@@ -104,7 +104,10 @@ class PositionManager:
 
     async def update_sl(self, pair: str, new_sl) -> None:
         if pair in self._running_positions:
-            self._running_positions[pair].current_sl = new_sl
+            position = self._running_positions[pair]
+            if position.current_sl != new_sl:
+                position.last_sl_alerted = None
+            position.current_sl = new_sl
             update_sl = getattr(self.db, "update_position_sl", None)
             if callable(update_sl):
                 await update_sl(pair, new_sl)

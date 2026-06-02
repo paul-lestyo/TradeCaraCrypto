@@ -127,3 +127,22 @@ async def test_reduce_only_filled_treated_as_manual_close_property():
     )
     assert "BTCUSDT" in pm.removed
     assert "closed:BTCUSDT:manual_close" in alert.sent
+
+
+@pytest.mark.asyncio
+async def test_sl_hit_alert_only_sent_once_per_level_property():
+    pos = RunningPosition("BTCUSDT", Direction.LONG, Decimal("70000"), Decimal("69374.1"), [Decimal("71000")], 50, "1", Decimal("0.1"), datetime.utcnow())
+    alert = _Alert()
+    pm = _PM(pos)
+    w = PriceWatcher(alert, pm)
+
+    class _TEWithPrice:
+        async def _get_market_reference_price(self, _pair):
+            return Decimal("69300")
+
+    w.trade_engine = _TEWithPrice()
+    await w.subscribe("BTCUSDT")
+    await w._watch_price()
+    await w._watch_price()
+
+    assert alert.sent.count("sl:BTCUSDT:69374.1") == 1

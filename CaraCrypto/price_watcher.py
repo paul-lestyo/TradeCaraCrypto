@@ -109,7 +109,9 @@ class PriceWatcher:
                     if applied:
                         pos.tp1_sl_plus_applied = True
             if pos.current_sl is not None and self._check_sl_reached(pos.direction, current_price, pos.current_sl):
-                await self.alert_service.notify_sl_hit(pair, str(pos.current_sl))
+                if pos.last_sl_alerted != pos.current_sl:
+                    await self.alert_service.notify_sl_hit(pair, str(pos.current_sl))
+                    pos.last_sl_alerted = pos.current_sl
 
     async def _reconcile_pending_limit_orders(self) -> None:
         if not self._pending_limit_orders or not self.trade_engine:

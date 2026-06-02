@@ -170,6 +170,31 @@ def test_current_sl_update_text_overrides_old_reply_sl_property():
     assert action.stop_loss == Decimal("0.01285")
 
 
+def test_current_sl_update_text_parses_k_suffix_property():
+    p = _parser()
+    context = MessageContext(
+        current_message=RawSignalMessage(
+            text="BTC ngeri gk ada buyernya. Probably hit SL soon, tapi kami akan geser SL ke 68,5K",
+            group_id=-1,
+            message_id=5282,
+            reply_text="[OPEN] BTC old setup",
+        ),
+        history=[],
+        position_state=PositionState(closed_today=[]),
+    )
+    payload = {
+        "action": "update_sl",
+        "pair": "BTCUSDT",
+        "direction": "LONG",
+        "stop_loss": 68500,
+    }
+    guarded = p._apply_current_text_guard(context, payload)
+    action = p._validate_and_build_action(guarded)
+    assert action is not None
+    assert action.action == GeminiAction.UPDATE_SL
+    assert action.stop_loss == Decimal("68500")
+
+
 def test_now_literal_forces_market_order_override_property():
     p = _parser()
     context = MessageContext(

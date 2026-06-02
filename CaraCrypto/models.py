@@ -95,6 +95,7 @@ class RunningPosition:
     tp1_notified: bool = False
     tp1_sl_plus_applied: bool = False
     last_tp_partial_index_applied: int = -1
+    last_sl_alerted: Optional[Decimal] = None
 
 
 @dataclass
