@@ -5,7 +5,7 @@
 # Dependensi
 # python-binance, position_manager, alert_service.
 # Main Functions
-# `execute_action`, startup reconcile + plan restore, seleksi entry/sizing direction-aware, recovery posisi exchange, cleanup algo protection order, dan handler proteksi.
+# `execute_action`, startup reconcile + plan restore, seleksi entry/sizing direction-aware, recovery posisi exchange, close market reduce-only, cleanup algo protection order, dan handler proteksi.
 # Side Effects
 # Menempatkan/cancel/close order di Binance.
 
@@ -294,6 +294,20 @@ class TradeEngine:
             remaining_qty = Decimal("0")
         await self.position_manager.update_quantity(pos.pair, remaining_qty)
         return True, normalized_qty, remaining_qty
+
+    async def _place_full_close_market_order(self, pos: RunningPosition) -> Decimal:
+        close_qty, _ = self._normalize_order_inputs(pos.pair, pos.quantity.copy_abs())
+        if close_qty <= 0:
+            raise ValueError(f"non_positive_close_qty pair={pos.pair}")
+        side = "SELL" if pos.direction == Direction.LONG else "BUY"
+        self._create_futures_order(
+            symbol=pos.pair,
+            side=side,
+            type="MARKET",
+            quantity=self._decimal_to_str(close_qty),
+            reduceOnly="true",
+        )
+        return close_qty
 
     async def _get_market_reference_price(self, pair: str) -> Optional[Decimal]:
         methods = (
@@ -1350,6 +1364,16 @@ class TradeEngine:
             {"STOP_MARKET", "TAKE_PROFIT_MARKET", "STOP", "TAKE_PROFIT"},
         )
 
+    async def _cancel_pending_entry_order(self, pair: str) -> None:
+        get_pending = getattr(self.position_manager, "get_pending_position", None)
+        pending = get_pending(pair) if callable(get_pending) else None
+        if not pending or not pending.order_id:
+            return
+        try:
+            self._cancel_order(pair, pending.order_id)
+        except Exception as exc:
+            self._write_audit_log("pending_entry_cancel_failed", pair=pair, order_id=pending.order_id, error=str(exc))
+
     def _get_final_tp_level(self, direction: Direction, tp_levels):
         return max(tp_levels) if direction == Direction.LONG else min(tp_levels)
 
@@ -1571,17 +1595,56 @@ class TradeEngine:
     async def _handle_cancel(self, action: TradeAction, message_db_id: Optional[int]) -> None:
         if not action.pair:
             return
-        if self.position_manager.has_position(action.pair):
+        action.pair = self._normalize_pair(action.pair)
+        pos = await self._resolve_open_position(action.pair, action, message_db_id)
+        if pos:
             await self._cleanup_protection_orders(action.pair)
+            try:
+                closed_qty = await self._place_full_close_market_order(pos)
+            except Exception as exc:
+                await self._safe_alert(
+                    "notify_error",
+                    "trade_engine_cancel",
+                    f"pair={action.pair} reason=close_order_failed err={exc}",
+                )
+                self._write_audit_log(
+                    "position_close_failed",
+                    pair=action.pair,
+                    message_db_id=message_db_id,
+                    reason="cancel",
+                    error=str(exc),
+                )
+                return
             await self.position_manager.remove_position(action.pair)
-        else:
-            has_pending = getattr(self.position_manager, "has_pending_position", None)
-            remove_pending = getattr(self.position_manager, "remove_pending_position", None)
-            if callable(has_pending) and callable(remove_pending) and has_pending(action.pair):
-                await remove_pending(action.pair)
-        await self._safe_alert("notify_closed", action.pair, "cancel")
-        await self.db.store_modification_log(action.pair, "cancel", {}, message_db_id)
-        self._write_audit_log("position_closed", pair=action.pair, message_db_id=message_db_id, reason="cancel")
+            await self._safe_alert("notify_closed", action.pair, "cancel")
+            await self.db.store_modification_log(
+                action.pair,
+                "cancel",
+                {"closed_qty": str(closed_qty), "close_order_type": "MARKET", "reduce_only": True},
+                message_db_id,
+            )
+            self._write_audit_log(
+                "position_closed",
+                pair=action.pair,
+                message_db_id=message_db_id,
+                reason="cancel",
+                closed_qty=closed_qty,
+            )
+            return
+
+        has_pending = getattr(self.position_manager, "has_pending_position", None)
+        remove_pending = getattr(self.position_manager, "remove_pending_position", None)
+        if callable(has_pending) and callable(remove_pending) and has_pending(action.pair):
+            await self._cancel_pending_entry_order(action.pair)
+            await remove_pending(action.pair)
+            await self._safe_alert("notify_closed", action.pair, "cancel")
+            await self.db.store_modification_log(action.pair, "cancel", {"status": "pending"}, message_db_id)
+            self._write_audit_log("pending_position_canceled", pair=action.pair, message_db_id=message_db_id)
+            return
+
+        await self._safe_alert("notify_error", "trade_engine_cancel", f"skip pair={action.pair} reason=no_open_position")
+        await self.db.store_modification_log(action.pair, "cancel_skipped", {"reason": "no_open_position"}, message_db_id)
+        self._write_audit_log("position_close_skipped", pair=action.pair, message_db_id=message_db_id, reason="no_open_position")
 
     async def _handle_reverse(self, action: TradeAction, message_db_id: Optional[int]) -> bool:
         if not action.pair:

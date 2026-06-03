@@ -118,6 +118,7 @@ class _Alert:
         self.modifications = []
         self.order_details = []
         self.protections = []
+        self.closed = []
 
     async def notify_new_order(self, *_):
         return None
@@ -139,6 +140,9 @@ class _Alert:
 
     async def notify_error(self, *args):
         self.errors.append(args)
+
+    async def notify_closed(self, *args):
+        self.closed.append(args)
 
 
 class _PM:
@@ -277,6 +281,52 @@ async def test_sl_breakeven_replaces_old_sl_order():
     stop_orders = [o for o in e.client.orders if o.get("type") == "STOP_MARKET"]
     assert stop_orders
     assert stop_orders[-1].get("stopPrice") == "100"
+
+
+@pytest.mark.asyncio
+async def test_cancel_running_position_places_reduce_only_market_close_property():
+    e = _engine()
+    await e.position_manager.add_position(
+        RunningPosition("PLUMEUSDT", Direction.LONG, Decimal("0.1"), Decimal("0.09"), [Decimal("0.12")], 50, "1", Decimal("100"), datetime.utcnow())
+    )
+    await e.execute_action(TradeAction(action=GeminiAction.CANCEL, pair="PLUMEUSDT", risk_level=RiskLevel.NORMAL), message_db_id=3)
+    close_orders = [o for o in e.client.orders if o.get("type") == "MARKET" and o.get("reduceOnly") == "true"]
+    assert close_orders
+    assert close_orders[-1]["symbol"] == "PLUMEUSDT"
+    assert close_orders[-1]["side"] == "SELL"
+    assert close_orders[-1]["quantity"] == "100"
+    assert not e.position_manager.has_position("PLUMEUSDT")
+    assert e.alert_service.closed == [("PLUMEUSDT", "cancel")]
+
+
+@pytest.mark.asyncio
+async def test_cancel_recovers_exchange_position_before_market_close_property():
+    e = _engine()
+    e.client.positions = [
+        {
+            "symbol": "PLUMEUSDT",
+            "positionAmt": "250",
+            "entryPrice": "0.1",
+            "leverage": "50",
+        }
+    ]
+    await e.execute_action(TradeAction(action=GeminiAction.CANCEL, pair="PLUMEUSDT", risk_level=RiskLevel.NORMAL), message_db_id=3)
+    close_orders = [o for o in e.client.orders if o.get("type") == "MARKET" and o.get("reduceOnly") == "true"]
+    assert close_orders[-1]["symbol"] == "PLUMEUSDT"
+    assert close_orders[-1]["side"] == "SELL"
+    assert close_orders[-1]["quantity"] == "250"
+    assert e.alert_service.closed == [("PLUMEUSDT", "cancel")]
+
+
+@pytest.mark.asyncio
+async def test_cancel_without_position_does_not_send_closed_property():
+    e = _engine()
+    await e.execute_action(TradeAction(action=GeminiAction.CANCEL, pair="PLUMEUSDT", risk_level=RiskLevel.NORMAL), message_db_id=3)
+    assert e.client.orders == []
+    assert e.alert_service.closed == []
+    assert e.alert_service.errors == [
+        ("trade_engine_cancel", "skip pair=PLUMEUSDT reason=no_open_position")
+    ]
 
 
 @pytest.mark.asyncio
