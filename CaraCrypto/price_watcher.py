@@ -102,12 +102,20 @@ class PriceWatcher:
                     and not pos.tp1_sl_plus_applied
                     and hasattr(self.trade_engine, "_handle_set_sl_plus_buffer")
                 ):
-                    applied = await self.trade_engine._handle_set_sl_plus_buffer(
-                        pair,
-                        source="watcher_tp1_auto",
-                    )
-                    if applied:
-                        pos.tp1_sl_plus_applied = True
+                    try:
+                        applied = await self.trade_engine._handle_set_sl_plus_buffer(
+                            pair,
+                            source="watcher_tp1_auto",
+                        )
+                        if applied:
+                            pos.tp1_sl_plus_applied = True
+                    except Exception as exc:
+                        print(f"[PriceWatcher] Failed to set SL+ buffer for {pair}: {exc}")
+                        await self.alert_service.notify_error(
+                            "watcher_sl_plus_failed",
+                            f"Gagal set SL+ breakeven untuk {pair}: {exc}"
+                        )
+
             if pos.current_sl is not None and self._check_sl_reached(pos.direction, current_price, pos.current_sl):
                 if pos.last_sl_alerted != pos.current_sl:
                     await self.alert_service.notify_sl_hit(pair, str(pos.current_sl))

@@ -800,6 +800,24 @@ class TradeEngine:
         if not action.pair:
             await self._safe_alert("notify_error", "trade_engine_new_signal", "empty pair after normalization")
             return False
+
+        # Batalkan semua order menggantung di Binance untuk pair ini saat sinyal baru masuk
+        try:
+            open_orders = self._get_open_orders(action.pair)
+            for order in open_orders:
+                oid = order.get("orderId")
+                if oid is not None:
+                    self._cancel_order(action.pair, oid)
+        except Exception as e:
+            self._write_audit_log("cancel_old_orders_failed", pair=action.pair, error=str(e))
+
+        # Bersihkan pending state di watcher & position manager agar tidak salah lacak
+        if self.price_watcher:
+            self.price_watcher._pending_limit_orders = {
+                oid: act for oid, act in self.price_watcher._pending_limit_orders.items()
+                if self._normalize_pair(act.pair) != action.pair
+            }
+        await self.position_manager.remove_pending_position(action.pair)
         order_type = OrderType.MARKET
         force_market = action.order_type == OrderType.MARKET
         market_price = await self._get_market_reference_price(action.pair)
@@ -1196,7 +1214,41 @@ class TradeEngine:
         exchange_pairs = set(exchange_positions.keys())
         removed: list[str] = []
         recovered: list[str] = []
-        kept = sorted(local_pairs & exchange_pairs)
+        kept: list[str] = []
+
+        # Periksa local & exchange overlap untuk kepatuhan arah (direction)
+        for pair in sorted(local_pairs & exchange_pairs):
+            pos_local = self.position_manager.get_position(pair)
+            pos_exch = exchange_positions[pair]
+            exch_dir = self._recover_position_direction(pos_exch, None)
+            if pos_local and exch_dir and pos_local.direction != exch_dir:
+                # Mismatch arah -> hapus dari lokal dan trigger recovery dengan data terbaru
+                await self.position_manager.remove_position(pair)
+                removed.append(pair)
+                await self.db.store_modification_log(pair, "startup_reconcile_direction_mismatch", {"source": "direction_mismatch"}, None)
+                
+                plan_action, plan_message_id = await self._get_recovery_plan_from_messages(pair, pos_exch)
+                pos = self._build_recovered_position(pair, pos_exch, plan_action, plan_message_id)
+                if pos:
+                    await self.position_manager.add_position(pos)
+                    recovered.append(pair)
+                    await self.db.store_modification_log(
+                        pair,
+                        "startup_reconcile_direction_mismatch_recovered",
+                        {
+                            "entry_price": str(pos.entry_price),
+                            "quantity": str(pos.quantity),
+                            "direction": pos.direction.value,
+                            "message_id": plan_message_id,
+                            "plan_restored": plan_action is not None,
+                            "stop_loss": str(pos.current_sl) if pos.current_sl is not None else None,
+                            "take_profit_levels": [str(level) for level in pos.tp_levels],
+                        },
+                        plan_message_id,
+                    )
+            else:
+                kept.append(pair)
+
         for pair in sorted(local_pairs - exchange_pairs):
             await self.position_manager.remove_position(pair)
             removed.append(pair)
@@ -1233,6 +1285,10 @@ class TradeEngine:
     ) -> Optional[RunningPosition]:
         pos = self.position_manager.get_position(pair)
         if pos:
+            # Pastikan posisi ini memang masih aktif di Binance (tidak diclose/reversed)
+            if not self._has_open_position_on_exchange(pair):
+                await self.position_manager.remove_position(pair)
+                return None
             return pos
         if not self._has_open_position_on_exchange(pair):
             return None

@@ -267,6 +267,7 @@ async def test_reverse_action_property():
 @pytest.mark.asyncio
 async def test_sl_breakeven_replaces_old_sl_order():
     e = _engine()
+    e.client.positions = [{"symbol": "BTCUSDT", "positionAmt": "0.1", "entryPrice": "100"}]
     await e.position_manager.add_position(
         RunningPosition("BTCUSDT", Direction.LONG, Decimal("100"), Decimal("90"), [Decimal("110")], 50, "1", Decimal("0.1"), datetime.utcnow())
     )
@@ -282,6 +283,7 @@ async def test_sl_breakeven_replaces_old_sl_order():
 @pytest.mark.asyncio
 async def test_tp_partial_sets_sl_plus_buffer_property():
     e = _engine()
+    e.client.positions = [{"symbol": "BTCUSDT", "positionAmt": "0.1", "entryPrice": "100"}]
     await e.position_manager.add_position(
         RunningPosition("BTCUSDT", Direction.LONG, Decimal("100"), Decimal("90"), [Decimal("99")], 50, "1", Decimal("0.1"), datetime.utcnow())
     )
