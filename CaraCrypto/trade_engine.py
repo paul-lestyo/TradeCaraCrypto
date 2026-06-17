@@ -841,11 +841,8 @@ class TradeEngine:
         if action.entry_zone and len(action.entry_zone) >= 2:
             zone_low = min(action.entry_zone[0], action.entry_zone[1])
             zone_high = max(action.entry_zone[0], action.entry_zone[1])
-            # Entry area directional:
-            # LONG  -> ambil 80% dari bawah ke atas area (dekat batas atas).
-            # SHORT -> kebalikannya, 20% dari bawah ke atas area (dekat batas bawah).
-            entry_ratio = Decimal("0.8") if action.direction == Direction.LONG else Decimal("0.2")
-            entry_raw = self._resolve_entry_from_zone_percent(action.entry_zone, entry_ratio)
+            # Paling murah: LONG -> lowest, SHORT -> highest
+            entry_raw = zone_low if action.direction == Direction.LONG else zone_high
 
         if force_market:
             order_type = OrderType.MARKET
@@ -1056,6 +1053,11 @@ class TradeEngine:
         if action.entry_price is not None:
             return action.entry_price
         if action.entry_zone:
+            if len(action.entry_zone) >= 2:
+                if action.direction == Direction.LONG:
+                    return min(action.entry_zone)
+                if action.direction == Direction.SHORT:
+                    return max(action.entry_zone)
             return sum(action.entry_zone) / Decimal(len(action.entry_zone))
         return None
 

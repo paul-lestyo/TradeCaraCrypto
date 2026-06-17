@@ -146,3 +146,109 @@ async def test_sl_hit_alert_only_sent_once_per_level_property():
     await w._watch_price()
 
     assert alert.sent.count("sl:BTCUSDT:69374.1") == 1
+
+
+@pytest.mark.asyncio
+async def test_tp2_hit_triggers_sl_plus_property():
+    pos = RunningPosition("BTCUSDT", Direction.LONG, Decimal("100"), Decimal("95"), [Decimal("110"), Decimal("120")], 50, "1", Decimal("0.1"), datetime.utcnow())
+    alert = _Alert()
+    pm = _PM(pos)
+    w = PriceWatcher(alert, pm)
+
+    class _TEWithBuffer:
+        def __init__(self):
+            self.applied_pair = None
+            self.source = None
+
+        async def _get_market_reference_price(self, _pair):
+            return Decimal("112") if not self.applied_pair else Decimal("122")
+
+        async def _handle_set_sl_plus_buffer(self, pair, source):
+            self.applied_pair = pair
+            self.source = source
+            return True
+
+    te = _TEWithBuffer()
+    w.trade_engine = te
+    await w.subscribe("BTCUSDT")
+
+    # 1. Price is at 112 (TP1 hit)
+    await w._watch_price()
+    assert pos.tp1_notified is True
+    assert te.applied_pair is None  # Not applied on TP1
+
+    # 2. Update price to 122 (TP2 hit)
+    async def get_price_122(_pair):
+        return Decimal("122")
+    te._get_market_reference_price = get_price_122
+
+    await w._watch_price()
+    assert getattr(pos, "tp2_notified", False) is True
+    assert te.applied_pair == "BTCUSDT"
+    assert te.source == "watcher_tp2_auto"
+
+
+@pytest.mark.asyncio
+async def test_trades_json_logging_property():
+    pos = RunningPosition("BTCUSDT", Direction.LONG, Decimal("100"), Decimal("95"), [Decimal("110")], 50, "1", Decimal("0.1"), datetime.utcnow())
+    alert = _Alert()
+    pm = _PM(pos)
+    w = PriceWatcher(alert, pm)
+    te = _TE()
+    w.trade_engine = te
+    
+    # Track calls to _write_trades_json
+    calls = []
+    def dummy_write(event, **kwargs):
+        calls.append((event, kwargs))
+    w._write_trades_json = dummy_write
+    
+    # 1. Test limit order filled
+    w.register_pending_order("oid1", TradeAction(action=GeminiAction.NEW_SIGNAL, pair="BTCUSDT"))
+    await w.handle_order_update("oid1", "LIMIT", "FILLED", "BTCUSDT")
+    
+    assert len(calls) == 1
+    assert calls[0][0] == "limit_order_filled"
+    assert calls[0][1]["pair"] == "BTCUSDT"
+    assert calls[0][1]["order_id"] == "oid1"
+    
+    # 2. Test position closed
+    calls.clear()
+    await w.handle_order_update("oid2", "TAKE_PROFIT_MARKET", "FILLED", "BTCUSDT")
+    assert len(calls) == 1
+    assert calls[0][0] == "position_closed"
+    assert calls[0][1]["pair"] == "BTCUSDT"
+    assert calls[0][1]["reason"] == "TP"
+
+
+def test_write_trades_json_file_writing_property():
+    from pathlib import Path
+    import json
+    
+    log_path = Path("logs/trades.json")
+    # Back up existing file if any
+    backup_path = Path("logs/trades.json.bak")
+    if log_path.exists():
+        if backup_path.exists():
+            backup_path.unlink()
+        log_path.rename(backup_path)
+        
+    try:
+        w = PriceWatcher(_Alert(), _PM(None))
+        w._write_trades_json("test_event", foo=Decimal("12.34"), bar="hello")
+        
+        assert log_path.exists()
+        with log_path.open("r", encoding="utf-8") as f:
+            lines = f.readlines()
+        assert len(lines) == 1
+        data = json.loads(lines[0])
+        assert data["event"] == "test_event"
+        assert data["foo"] == "12.34"
+        assert data["bar"] == "hello"
+        assert "timestamp" in data
+    finally:
+        if log_path.exists():
+            log_path.unlink()
+        if backup_path.exists():
+            backup_path.rename(log_path)
+

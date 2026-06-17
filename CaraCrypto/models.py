@@ -94,6 +94,8 @@ class RunningPosition:
     message_db_id: Optional[int] = None
     tp1_notified: bool = False
     tp1_sl_plus_applied: bool = False
+    tp2_notified: bool = False
+    tp2_sl_plus_applied: bool = False
     last_tp_partial_index_applied: int = -1
     last_sl_alerted: Optional[Decimal] = None
 

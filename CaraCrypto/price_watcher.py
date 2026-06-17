@@ -97,18 +97,24 @@ class PriceWatcher:
                 if not pos.tp1_notified:
                     await self.alert_service.notify_tp_hit(pair, str(tp1))
                     pos.tp1_notified = True
+
+            tp2 = self._get_tp2_level(pos.direction, pos.tp_levels)
+            if tp2 is not None and self._check_tp_level_reached(pos.direction, current_price, tp2):
+                if not getattr(pos, "tp2_notified", False):
+                    await self.alert_service.notify_tp_hit(pair, str(tp2))
+                    pos.tp2_notified = True
                 if (
                     self.trade_engine
-                    and not pos.tp1_sl_plus_applied
+                    and not getattr(pos, "tp2_sl_plus_applied", False)
                     and hasattr(self.trade_engine, "_handle_set_sl_plus_buffer")
                 ):
                     try:
                         applied = await self.trade_engine._handle_set_sl_plus_buffer(
                             pair,
-                            source="watcher_tp1_auto",
+                            source="watcher_tp2_auto",
                         )
                         if applied:
-                            pos.tp1_sl_plus_applied = True
+                            pos.tp2_sl_plus_applied = True
                     except Exception as exc:
                         print(f"[PriceWatcher] Failed to set SL+ buffer for {pair}: {exc}")
                         await self.alert_service.notify_error(
@@ -190,6 +196,12 @@ class PriceWatcher:
         if direction == Direction.LONG:
             return min(tp_levels)
         return max(tp_levels)
+
+    def _get_tp2_level(self, direction: Direction, tp_levels: list[Decimal]) -> Decimal | None:
+        if not tp_levels or len(tp_levels) < 2:
+            return None
+        ordered = sorted(tp_levels) if direction == Direction.LONG else sorted(tp_levels, reverse=True)
+        return ordered[1]
 
     async def _start_user_data_stream(self) -> None:
         print("[PriceWatcher] User data stream loop started")
@@ -374,6 +386,14 @@ class PriceWatcher:
                 pos = self.position_manager.get_position(pair_for_pos)
             if pos and self.trade_engine:
                 print(f"[PriceWatcher] limit filled -> set_tp_sl_orders pair={action.pair}")
+                self._write_trades_json(
+                    "limit_order_filled",
+                    pair=pair_for_pos,
+                    order_id=order_id,
+                    entry_price=pos.entry_price,
+                    quantity=pos.quantity,
+                    source="socket",
+                )
                 await self._safe_alert("notify_order_filled", pair, "limit", str(pos.entry_price))
                 await self.trade_engine._set_tp_sl_orders(pos)
             if pos:
@@ -407,6 +427,14 @@ class PriceWatcher:
                 promoted = await promote_pending(pair) if callable(promote_pending) else None
                 pos = promoted if promoted else self.position_manager.get_position(pair)
             if pos and self.trade_engine:
+                self._write_trades_json(
+                    "limit_order_filled",
+                    pair=pair,
+                    order_id=order_id,
+                    entry_price=pos.entry_price,
+                    quantity=pos.quantity,
+                    source="socket",
+                )
                 await self._safe_alert("notify_order_filled", pair, "limit", str(pos.entry_price))
                 await self.trade_engine._set_tp_sl_orders(pos)
         if order_type in {"TAKE_PROFIT_MARKET", "STOP_MARKET"} and status == "FILLED":
@@ -414,13 +442,19 @@ class PriceWatcher:
             print(f"[PriceWatcher] protection order filled -> close_type={close_type} pair={pair}")
             await self._handle_position_closed(pair, close_type)
             return
-
+ 
         if status == "FILLED" and (reduce_only or close_position):
             print(f"[PriceWatcher] close order filled -> pair={pair} side={side}")
             await self._handle_position_closed(pair, "manual_close")
-
+ 
     async def _handle_position_closed(self, pair: str, close_type: str) -> None:
         print(f"[PriceWatcher] handle_position_closed pair={pair} close_type={close_type}")
+        self._write_trades_json(
+            "position_closed",
+            pair=pair,
+            reason=close_type,
+            source="socket",
+        )
         await self.unsubscribe(pair)
         if self.trade_engine and hasattr(self.trade_engine, "_cleanup_protection_orders"):
             try:
@@ -430,6 +464,29 @@ class PriceWatcher:
                 pass
         await self.position_manager.remove_position(pair)
         await self._safe_alert("notify_closed", pair, close_type)
+
+    def _write_trades_json(self, event: str, **kwargs) -> None:
+        import json
+        from pathlib import Path
+        from datetime import datetime, timezone
+        
+        log_path = Path("logs/trades.json")
+        payload = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "event": event,
+        }
+        def serialize_value(val):
+            if isinstance(val, Decimal):
+                return str(val)
+            return val
+            
+        payload.update({k: serialize_value(v) for k, v in kwargs.items()})
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with log_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        except Exception as e:
+            print(f"[PriceWatcher] Failed to write to trades.json: {e}")
 
     async def handle_order_update(
         self,

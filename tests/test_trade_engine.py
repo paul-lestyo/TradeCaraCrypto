@@ -287,6 +287,14 @@ async def test_sl_breakeven_replaces_old_sl_order():
 @pytest.mark.asyncio
 async def test_cancel_running_position_places_reduce_only_market_close_property():
     e = _engine()
+    e.client.positions = [
+        {
+            "symbol": "PLUMEUSDT",
+            "positionAmt": "100",
+            "entryPrice": "0.1",
+            "leverage": "50",
+        }
+    ]
     await e.position_manager.add_position(
         RunningPosition("PLUMEUSDT", Direction.LONG, Decimal("0.1"), Decimal("0.09"), [Decimal("0.12")], 50, "1", Decimal("100"), datetime.utcnow())
     )
@@ -556,8 +564,44 @@ async def test_short_entry_zone_limit_when_market_below_cheapest_area_property()
     )
     assert accepted is True
     assert e.client.orders[0]["type"] == "LIMIT"
-    assert e.client.orders[0]["price"] == "0.0064"
-    assert e.position_manager.get_pending_position("BRETTUSDT").entry_price == Decimal("0.0064")
+    assert e.client.orders[0]["price"] == "0.008"
+    assert e.position_manager.get_pending_position("BRETTUSDT").entry_price == Decimal("0.0080")
+
+
+@pytest.mark.asyncio
+async def test_long_entry_zone_limit_when_market_above_cheapest_area_property():
+    class _ClientWithFilters(_Client):
+        def futures_exchange_info(self, **_):
+            return {
+                "symbols": [
+                    {
+                        "symbol": "BRETTUSDT",
+                        "filters": [
+                            {"filterType": "PRICE_FILTER", "tickSize": "0.0001"},
+                            {"filterType": "LOT_SIZE", "stepSize": "1"},
+                        ],
+                    }
+                ]
+            }
+
+        def mark_price(self, **_):
+            return {"markPrice": "0.009"}
+
+    e = _engine(_ClientWithFilters())
+    accepted = await e.execute_action(
+        TradeAction(
+            action=GeminiAction.NEW_SIGNAL,
+            pair="BRETTUSDT",
+            direction=Direction.LONG,
+            order_type=OrderType.LIMIT,
+            entry_zone=[Decimal("0.0060"), Decimal("0.0080")],
+            risk_level=RiskLevel.NORMAL,
+        )
+    )
+    assert accepted is True
+    assert e.client.orders[0]["type"] == "LIMIT"
+    assert e.client.orders[0]["price"] == "0.006"
+    assert e.position_manager.get_pending_position("BRETTUSDT").entry_price == Decimal("0.0060")
 
 
 @pytest.mark.asyncio

@@ -149,7 +149,34 @@ async def _process_one_signal(raw, db, context_builder, parser, engine, watcher)
         print(f"[Watcher] Subscribed pair={action.pair}")
 
 
+import sys
+import os
+
+class DualWrite:
+    def __init__(self, original_stream, log_file_path):
+        self.original_stream = original_stream
+        self.log_file_path = log_file_path
+
+    def write(self, message):
+        self.original_stream.write(message)
+        try:
+            os.makedirs(os.path.dirname(self.log_file_path), exist_ok=True)
+            with open(self.log_file_path, "a", encoding="utf-8") as f:
+                f.write(message)
+        except Exception:
+            pass
+
+    def flush(self):
+        self.original_stream.flush()
+
+    def __getattr__(self, attr):
+        return getattr(self.original_stream, attr)
+
+
 async def main() -> None:
+    log_path = "logs/trade.log"
+    sys.stdout = DualWrite(sys.stdout, log_path)
+    sys.stderr = DualWrite(sys.stderr, log_path)
     print("[Main] Starting CaraCrypto Trader...")
     _bootstrap_env()
     cfg = load_config()

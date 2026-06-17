@@ -1,0 +1,3 @@
+{"timestamp": "2026-06-17T22:34:52.054312+00:00", "event": "limit_order_filled", "pair": "BTCUSDT", "order_id": "oid1", "entry_price": "100", "quantity": "0.1", "source": "socket"}
+{"timestamp": "2026-06-17T22:34:52.064726+00:00", "event": "position_closed", "pair": "BTCUSDT", "reason": "TP", "source": "socket"}
+{"timestamp": "2026-06-17T22:34:52.075397+00:00", "event": "position_closed", "pair": "BTCUSDT", "reason": "manual_close", "source": "socket"}
