@@ -33,7 +33,7 @@ Thumbs.db
 
 # Runtime/session/log artifacts
 sessions/
-*.log
+
 
 # Build/distribution artifacts
 build/
