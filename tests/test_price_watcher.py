@@ -184,8 +184,7 @@ async def test_tp2_hit_triggers_sl_plus_property():
 
     await w._watch_price()
     assert getattr(pos, "tp2_notified", False) is True
-    assert te.applied_pair == "BTCUSDT"
-    assert te.source == "watcher_tp2_auto"
+    assert te.applied_pair is None
 
 
 @pytest.mark.asyncio

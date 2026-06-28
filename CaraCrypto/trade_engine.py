@@ -523,8 +523,6 @@ class TradeEngine:
     def _calculate_margin_budget(self, balance: Decimal, risk_level: RiskLevel) -> Decimal:
         margin_pct = Decimal(str(self.risk_config.trade_margin_percent)) / Decimal("100")
         base_margin = balance * margin_pct
-        if risk_level == RiskLevel.HIGH:
-            base_margin *= Decimal(str(self.risk_config.high_risk_multiplier))
         return max(base_margin, Decimal("0"))
 
     def _calculate_position_size(
@@ -815,6 +813,17 @@ class TradeEngine:
             await self._safe_alert("notify_error", "trade_engine_new_signal", "empty pair after normalization")
             return False
 
+        # Guard: Reject trade if SL or TP is missing
+        if action.stop_loss is None or not action.take_profit_levels:
+            self._write_audit_log(
+                "new_signal_rejected",
+                reason="missing_sl_or_tp",
+                pair=action.pair,
+                message_db_id=message_db_id,
+            )
+            await self._safe_alert("send_alert", "trade plan no SL TP")
+            return False
+
         # Batalkan semua order menggantung di Binance untuk pair ini saat sinyal baru masuk
         try:
             open_orders = self._get_open_orders(action.pair)
@@ -832,55 +841,7 @@ class TradeEngine:
                 if self._normalize_pair(act.pair) != action.pair
             }
         await self.position_manager.remove_pending_position(action.pair)
-        order_type = OrderType.MARKET
-        force_market = action.order_type == OrderType.MARKET
-        market_price = await self._get_market_reference_price(action.pair)
-        zone_low = None
-        zone_high = None
-        entry_raw = None
-        if action.entry_zone and len(action.entry_zone) >= 2:
-            zone_low = min(action.entry_zone[0], action.entry_zone[1])
-            zone_high = max(action.entry_zone[0], action.entry_zone[1])
-            # Paling murah: LONG -> lowest, SHORT -> highest
-            entry_raw = zone_low if action.direction == Direction.LONG else zone_high
 
-        if force_market:
-            order_type = OrderType.MARKET
-            if market_price is not None:
-                action.entry_price = market_price
-        elif zone_low is not None and zone_high is not None and entry_raw is not None:
-            if self._should_use_market_entry(action.direction, market_price, zone_low, zone_high):
-                order_type = OrderType.MARKET
-                action.entry_price = market_price
-            else:
-                order_type = OrderType.LIMIT
-                _, normalized_entry = self._normalize_order_inputs(action.pair, Decimal("1"), entry_raw)
-                action.entry_price = normalized_entry if normalized_entry is not None else entry_raw
-        else:
-            if action.entry_price is not None:
-                if self._should_use_market_entry(action.direction, market_price, action.entry_price, action.entry_price):
-                    order_type = OrderType.MARKET
-                    action.entry_price = market_price
-                else:
-                    order_type = OrderType.LIMIT
-            else:
-                order_type = OrderType.MARKET
-                action.entry_price = market_price
-
-        if action.entry_price is None:
-            self._write_audit_log(
-                "new_signal_rejected",
-                reason="missing_entry_price",
-                pair=action.pair,
-                message_db_id=message_db_id,
-                action=action.action.value,
-            )
-            await self._safe_alert(
-                "notify_error",
-                "trade_engine_new_signal",
-                f"missing entry_price/entry_zone for computed {order_type.value} order pair={action.pair}",
-            )
-            return False
         requested_leverage = self.get_leverage(action.pair)
         account_balance = await self._get_account_balance()
         if account_balance is None:
@@ -892,8 +853,18 @@ class TradeEngine:
                 action=action.action.value,
             )
             return False
+
+        # Use temporary action to check risk limit (risk check doesn't block on entry price size)
+        temp_entry_price = action.entry_price
+        if temp_entry_price is None and action.entry_zone and len(action.entry_zone) >= 2:
+            temp_entry_price = action.entry_zone[0]
+        if temp_entry_price is None:
+            temp_entry_price = await self._get_market_reference_price(action.pair)
+        if temp_entry_price is None:
+            temp_entry_price = Decimal("1")
+
         if not await self._check_risk_limits(
-            action.pair, action.entry_price, action.risk_level, requested_leverage, account_balance
+            action.pair, temp_entry_price, action.risk_level, requested_leverage, account_balance
         ):
             self._write_audit_log(
                 "new_signal_rejected",
@@ -905,119 +876,307 @@ class TradeEngine:
                 account_balance=account_balance,
             )
             return False
+
         await self._set_margin_mode_cross(action.pair)
         leverage = await self._set_leverage(action.pair, requested_leverage)
-        qty = self._calculate_position_size(action.entry_price, leverage, action.risk_level, account_balance)
-        if qty <= 0:
-            self._write_audit_log(
-                "new_signal_rejected",
-                reason="non_positive_qty",
-                pair=action.pair,
-                message_db_id=message_db_id,
-                action=action.action.value,
-                requested_leverage=requested_leverage,
-                effective_leverage=leverage,
-                account_balance=account_balance,
-                entry_price=action.entry_price,
-            )
-            return False
-        order_id = ""
-        try:
-            if order_type == OrderType.LIMIT:
-                order_id = await self._place_limit_order(action, qty)
+        market_price = await self._get_market_reference_price(action.pair)
+        force_market = action.order_type == OrderType.MARKET
+
+        is_double_entry = bool(action.entry_zone and len(action.entry_zone) >= 2 and not force_market)
+
+        if is_double_entry:
+            # 1. DOUBLE ENTRY LOGIC (0.5% + 2.0% margins)
+            zone_low = min(action.entry_zone[0], action.entry_zone[1])
+            zone_high = max(action.entry_zone[0], action.entry_zone[1])
+
+            if action.direction == Direction.LONG:
+                entry_1_price = zone_high
+                entry_2_price = zone_low
             else:
-                order_id = await self._place_market_order(action, qty)
-        except Exception as exc:
+                entry_1_price = zone_low
+                entry_2_price = zone_high
+
+            budget_1 = account_balance * Decimal("0.005")  # 0.5%
+            budget_2 = account_balance * Decimal("0.02")   # 2.0%
+
+            qty_1_raw = (budget_1 * Decimal(leverage)) / entry_1_price
+            qty_2_raw = (budget_2 * Decimal(leverage)) / entry_2_price
+
+            qty_1, normalized_entry_1 = self._normalize_order_inputs(action.pair, qty_1_raw, entry_1_price)
+            qty_2, normalized_entry_2 = self._normalize_order_inputs(action.pair, qty_2_raw, entry_2_price)
+
+            entry_1_price = normalized_entry_1 if normalized_entry_1 is not None else entry_1_price
+            entry_2_price = normalized_entry_2 if normalized_entry_2 is not None else entry_2_price
+
+            if qty_1 <= 0 and qty_2 <= 0:
+                self._write_audit_log(
+                    "new_signal_rejected",
+                    reason="non_positive_qty_for_both_entries",
+                    pair=action.pair,
+                    message_db_id=message_db_id,
+                )
+                return False
+
+            # Determine order routing
+            type_1 = OrderType.LIMIT
+            if market_price is not None:
+                if action.direction == Direction.LONG and market_price <= entry_1_price:
+                    type_1 = OrderType.MARKET
+                elif action.direction == Direction.SHORT and market_price >= entry_1_price:
+                    type_1 = OrderType.MARKET
+
+            type_2 = OrderType.LIMIT
+            if market_price is not None:
+                if action.direction == Direction.LONG and market_price <= entry_2_price:
+                    type_2 = OrderType.MARKET
+                elif action.direction == Direction.SHORT and market_price >= entry_2_price:
+                    type_2 = OrderType.MARKET
+
+            action_1 = TradeAction(
+                action=GeminiAction.NEW_SIGNAL,
+                pair=action.pair,
+                direction=action.direction,
+                entry_price=entry_1_price,
+                stop_loss=action.stop_loss,
+                take_profit_levels=action.take_profit_levels,
+            )
+
+            action_2 = TradeAction(
+                action=GeminiAction.NEW_SIGNAL,
+                pair=action.pair,
+                direction=action.direction,
+                entry_price=entry_2_price,
+                stop_loss=action.stop_loss,
+                take_profit_levels=action.take_profit_levels,
+            )
+
+            order_id_1 = ""
+            order_id_2 = ""
+
+            if qty_1 > 0:
+                if type_1 == OrderType.MARKET:
+                    order_id_1 = await self._place_market_order(action_1, qty_1)
+                else:
+                    order_id_1 = await self._place_limit_order(action_1, qty_1)
+
+            if qty_2 > 0:
+                if type_2 == OrderType.MARKET:
+                    order_id_2 = await self._place_market_order(action_2, qty_2)
+                else:
+                    order_id_2 = await self._place_limit_order(action_2, qty_2)
+
+            primary_order_id = order_id_1 if qty_1 > 0 else order_id_2
+            primary_qty = qty_1 if qty_1 > 0 else qty_2
+            primary_entry_price = entry_1_price if qty_1 > 0 else entry_2_price
+            is_running = (qty_1 > 0 and type_1 == OrderType.MARKET) or (qty_1 <= 0 and qty_2 > 0 and type_2 == OrderType.MARKET)
+
+            pos = RunningPosition(
+                pair=action.pair,
+                direction=action.direction,
+                entry_price=primary_entry_price,
+                current_sl=action.stop_loss,
+                tp_levels=action.take_profit_levels or [],
+                leverage=leverage,
+                order_id=primary_order_id,
+                quantity=primary_qty,
+                opened_at=datetime.now(timezone.utc),
+                message_db_id=message_db_id,
+            )
+
+            if is_running:
+                await self.position_manager.add_position(pos)
+                if qty_1 > 0 and qty_2 > 0 and type_1 == OrderType.MARKET and type_2 == OrderType.MARKET:
+                    await self._sync_position_with_exchange(action.pair)
+                else:
+                    if qty_2 > 0 and type_2 == OrderType.LIMIT and self.price_watcher:
+                        self.price_watcher.register_pending_order(order_id_2, action_2)
+
+                await self._safe_alert("notify_order_filled", action.pair, "market", str(pos.entry_price))
+                await self._set_tp_sl_orders(pos, message_db_id)
+            else:
+                add_pending = getattr(self.position_manager, "add_pending_position", None)
+                if callable(add_pending):
+                    await add_pending(pos)
+                else:
+                    await self.position_manager.add_position(pos)
+
+                if self.price_watcher:
+                    if qty_1 > 0 and type_1 == OrderType.LIMIT:
+                        self.price_watcher.register_pending_order(order_id_1, action_1)
+                    if qty_2 > 0 and type_2 == OrderType.LIMIT:
+                        self.price_watcher.register_pending_order(order_id_2, action_2)
+
+            final_tp = self._get_final_tp_level(pos.direction, pos.tp_levels) if pos.tp_levels else None
+            _, detail_sl = self._normalize_order_inputs(action.pair, Decimal("1"), pos.current_sl) if pos.current_sl is not None else (Decimal("1"), None)
+            _, detail_tp = self._normalize_order_inputs(action.pair, Decimal("1"), final_tp) if final_tp is not None else (Decimal("1"), None)
+
+            await self._safe_alert(
+                "notify_new_order_detail",
+                action.pair,
+                action.direction.value,
+                f"double_entry:{type_1.value}/{type_2.value}",
+                f"{entry_1_price}/{entry_2_price}",
+                f"{qty_1}/{qty_2}",
+                leverage,
+                f"{(budget_1 + budget_2):.2f}",
+                str(detail_sl) if detail_sl is not None else None,
+                str(detail_tp) if detail_tp is not None else None,
+                action.action.value,
+                str([str(x) for x in action.entry_zone]) if action.entry_zone else None,
+                None,
+                f"{entry_1_price}/{entry_2_price}",
+            )
+
             self._write_audit_log(
-                "new_signal_failed",
-                reason="order_placement_exception",
+                "new_signal_executed",
                 pair=action.pair,
                 message_db_id=message_db_id,
                 action=action.action.value,
-                order_type=order_type.value,
+                side=action.direction.value,
+                order_type="double_entry",
+                order_id=primary_order_id,
+                order_id_1=order_id_1,
+                order_id_2=order_id_2,
                 requested_leverage=requested_leverage,
                 effective_leverage=leverage,
                 account_balance=account_balance,
-                qty=qty,
-                error=str(exc),
+                risk_level=action.risk_level.value,
+                entry_raw=f"{entry_1_price}/{entry_2_price}",
+                entry_final=f"{entry_1_price}/{entry_2_price}",
+                qty=f"{qty_1}/{qty_2}",
+                margin_used=budget_1 + budget_2,
+                stop_loss=detail_sl,
+                take_profit=detail_tp,
+                entry_zone=action.entry_zone,
             )
-            await self._safe_alert(
-                "notify_error",
-                "trade_engine_order",
-                f"pair={action.pair} type={order_type.value} err={exc}",
+            return True
+
+        else:
+            # 2. SINGLE ENTRY FALLBACK LOGIC (2.5% margin budget)
+            entry_price_final = action.entry_price if (action.entry_price is not None and not force_market) else market_price
+            if entry_price_final is None:
+                self._write_audit_log(
+                    "new_signal_rejected",
+                    reason="missing_entry_price",
+                    pair=action.pair,
+                    message_db_id=message_db_id,
+                    action=action.action.value,
+                )
+                await self._safe_alert(
+                    "notify_error",
+                    "trade_engine_new_signal",
+                    f"missing entry_price/entry_zone for computed order pair={action.pair}",
+                )
+                return False
+
+            budget = account_balance * Decimal("0.025")  # 2.5%
+            qty_raw = (budget * Decimal(leverage)) / entry_price_final
+
+            qty, normalized_entry = self._normalize_order_inputs(action.pair, qty_raw, entry_price_final)
+            entry_price_final = normalized_entry if normalized_entry is not None else entry_price_final
+
+            if qty <= 0:
+                self._write_audit_log(
+                    "new_signal_rejected",
+                    reason="non_positive_qty",
+                    pair=action.pair,
+                    message_db_id=message_db_id,
+                    action=action.action.value,
+                )
+                return False
+
+            order_type = OrderType.LIMIT
+            if force_market or market_price is not None:
+                if force_market:
+                    order_type = OrderType.MARKET
+                elif action.direction == Direction.LONG and market_price <= entry_price_final:
+                    order_type = OrderType.MARKET
+                elif action.direction == Direction.SHORT and market_price >= entry_price_final:
+                    order_type = OrderType.MARKET
+
+            action_final = TradeAction(
+                action=GeminiAction.NEW_SIGNAL,
+                pair=action.pair,
+                direction=action.direction,
+                entry_price=entry_price_final,
+                stop_loss=action.stop_loss,
+                take_profit_levels=action.take_profit_levels,
             )
-            return False
-        pos = RunningPosition(
-            pair=action.pair,
-            direction=action.direction,
-            entry_price=action.entry_price,
-            current_sl=action.stop_loss,
-            tp_levels=action.take_profit_levels or [],
-            leverage=leverage,
-            order_id=order_id,
-            quantity=qty,
-            opened_at=datetime.now(timezone.utc),
-            message_db_id=message_db_id,
-        )
-        if order_type == OrderType.LIMIT:
-            add_pending = getattr(self.position_manager, "add_pending_position", None)
-            if callable(add_pending):
-                await add_pending(pos)
+
+            order_id = ""
+            if order_type == OrderType.MARKET:
+                order_id = await self._place_market_order(action_final, qty)
+            else:
+                order_id = await self._place_limit_order(action_final, qty)
+
+            pos = RunningPosition(
+                pair=action.pair,
+                direction=action.direction,
+                entry_price=entry_price_final,
+                current_sl=action.stop_loss,
+                tp_levels=action.take_profit_levels or [],
+                leverage=leverage,
+                order_id=order_id,
+                quantity=qty,
+                opened_at=datetime.now(timezone.utc),
+                message_db_id=message_db_id,
+            )
+
+            if order_type == OrderType.LIMIT:
+                add_pending = getattr(self.position_manager, "add_pending_position", None)
+                if callable(add_pending):
+                    await add_pending(pos)
+                else:
+                    await self.position_manager.add_position(pos)
+                if self.price_watcher:
+                    self.price_watcher.register_pending_order(order_id, action_final)
             else:
                 await self.position_manager.add_position(pos)
-            if self.price_watcher:
-                self.price_watcher.register_pending_order(order_id, action)
-        else:
-            await self.position_manager.add_position(pos)
-            await self._safe_alert("notify_order_filled", action.pair, order_type.value, str(action.entry_price))
-            await self._set_tp_sl_orders(pos, message_db_id)
-        final_tp = self._get_final_tp_level(pos.direction, pos.tp_levels) if pos.tp_levels else None
-        detail_qty, detail_entry = self._normalize_order_inputs(
-            action.pair,
-            qty,
-            action.entry_price if order_type == OrderType.LIMIT else None,
-        )
-        detail_entry_value = detail_entry if detail_entry is not None else action.entry_price
-        margin_used = self._calculate_effective_margin_used(detail_entry_value, detail_qty, leverage)
-        _, detail_sl = self._normalize_order_inputs(action.pair, Decimal("1"), pos.current_sl) if pos.current_sl is not None else (Decimal("1"), None)
-        _, detail_tp = self._normalize_order_inputs(action.pair, Decimal("1"), final_tp) if final_tp is not None else (Decimal("1"), None)
-        await self._safe_alert(
-            "notify_new_order_detail",
-            action.pair,
-            action.direction.value,
-            order_type.value,
-            str(detail_entry_value),
-            str(detail_qty),
-            leverage,
-            f"{margin_used:.2f}",
-            str(detail_sl) if detail_sl is not None else None,
-            str(detail_tp) if detail_tp is not None else None,
-            action.action.value,
-            str([str(x) for x in action.entry_zone]) if action.entry_zone else None,
-            str(entry_raw) if entry_raw is not None else None,
-            str(detail_entry_value),
-        )
-        self._write_audit_log(
-            "new_signal_executed",
-            pair=action.pair,
-            message_db_id=message_db_id,
-            action=action.action.value,
-            side=action.direction.value if action.direction else None,
-            order_type=order_type.value,
-            order_id=order_id,
-            requested_leverage=requested_leverage,
-            effective_leverage=leverage,
-            account_balance=account_balance,
-            risk_level=action.risk_level.value,
-            entry_raw=entry_raw,
-            entry_final=detail_entry_value,
-            qty=detail_qty,
-            margin_used=margin_used,
-            stop_loss=detail_sl,
-            take_profit=detail_tp,
-            entry_zone=action.entry_zone,
-        )
-        return True
+                await self._safe_alert("notify_order_filled", action.pair, order_type.value, str(entry_price_final))
+                await self._set_tp_sl_orders(pos, message_db_id)
+
+            final_tp = self._get_final_tp_level(pos.direction, pos.tp_levels) if pos.tp_levels else None
+            _, detail_sl = self._normalize_order_inputs(action.pair, Decimal("1"), pos.current_sl) if pos.current_sl is not None else (Decimal("1"), None)
+            _, detail_tp = self._normalize_order_inputs(action.pair, Decimal("1"), final_tp) if final_tp is not None else (Decimal("1"), None)
+
+            await self._safe_alert(
+                "notify_new_order_detail",
+                action.pair,
+                action.direction.value,
+                order_type.value,
+                str(entry_price_final),
+                str(qty),
+                leverage,
+                f"{budget:.2f}",
+                str(detail_sl) if detail_sl is not None else None,
+                str(detail_tp) if detail_tp is not None else None,
+                action.action.value,
+                None,
+                None,
+                str(entry_price_final),
+            )
+
+            self._write_audit_log(
+                "new_signal_executed",
+                pair=action.pair,
+                message_db_id=message_db_id,
+                action=action.action.value,
+                side=action.direction.value,
+                order_type=order_type.value,
+                order_id=order_id,
+                requested_leverage=requested_leverage,
+                effective_leverage=leverage,
+                account_balance=account_balance,
+                risk_level=action.risk_level.value,
+                entry_raw=entry_price_final,
+                entry_final=entry_price_final,
+                qty=qty,
+                margin_used=budget,
+                stop_loss=detail_sl,
+                take_profit=detail_tp,
+                entry_zone=action.entry_zone,
+            )
+            return True
 
     def _has_open_position_on_exchange(self, pair: str) -> bool:
         running_pairs = self._get_binance_running_pairs()
@@ -1216,6 +1375,48 @@ class TradeEngine:
             leverage=pos.leverage,
             source_action=action.action.value,
         )
+        return pos
+
+    async def _sync_position_with_exchange(self, pair: str) -> Optional[RunningPosition]:
+        pair = self._normalize_pair(pair)
+        pos = self.position_manager.get_position(pair)
+        is_pending = False
+        if not pos:
+            pos = self.position_manager.get_pending_position(pair)
+            is_pending = True
+        if not pos:
+            return None
+
+        payload = self._get_binance_position_payload(pair)
+        if not payload:
+            return pos
+
+        amt = self._position_amount(payload)
+        entry_price = self._position_decimal(payload, "entryPrice", "entry_price", "breakEvenPrice")
+        leverage_raw = payload.get("leverage")
+        try:
+            leverage = int(Decimal(str(leverage_raw)))
+        except Exception:
+            leverage = pos.leverage
+
+        if amt is not None and amt.copy_abs() > 0 and entry_price is not None and entry_price > 0:
+            actual_qty = amt.copy_abs()
+            pos.quantity = actual_qty
+            pos.entry_price = entry_price
+            pos.leverage = leverage
+
+            if is_pending:
+                await self.position_manager.promote_pending_position(pair)
+            
+            await self.db.store_position(pos, status="running")
+
+            self._write_audit_log(
+                "position_synced_with_exchange",
+                pair=pair,
+                entry_price=str(entry_price),
+                quantity=str(actual_qty),
+                leverage=leverage,
+            )
         return pos
 
     async def reconcile_positions_with_exchange(self) -> dict[str, list[str]]:
@@ -1557,11 +1758,11 @@ class TradeEngine:
             )
             return
         reached_idx = self._resolve_reached_tp_index(pos, current_price)
-        if reached_idx < 0:
+        if reached_idx != 1:
             await self._safe_alert(
                 "notify_error",
                 "trade_engine_tp_partial",
-                f"skip pair={action.pair} reason=tp_not_reached",
+                f"skip pair={action.pair} reason=tp_level_not_tp2 reached_level=TP{reached_idx + 1}",
             )
             return
         if reached_idx <= pos.last_tp_partial_index_applied:
@@ -1571,18 +1772,10 @@ class TradeEngine:
                 f"skip pair={action.pair} reason=tp_level_already_processed last={pos.last_tp_partial_index_applied + 1}",
             )
             return
-        new_sl: Optional[Decimal] = None
-        close_percentage = 0.0
+
+        close_percentage = 70.0
         ordered_tp = self._ordered_tp_levels(pos)
-        if reached_idx == 0:
-            close_percentage = self.PARTIAL_MEDIUM_PERCENT
-            new_sl = self._compute_sl_plus_from_entry(pos.direction, pos.entry_price)
-        elif reached_idx == 1:
-            close_percentage = self.PARTIAL_MEDIUM_PERCENT
-            new_sl = ordered_tp[0]
-        else:
-            close_percentage = 20.0
-            new_sl = ordered_tp[reached_idx - 1]
+        new_sl = ordered_tp[0] if ordered_tp else None
 
         partial_ok, closed_qty, remaining_qty = await self._place_partial_close_market_order(pos, close_percentage)
         if not partial_ok:

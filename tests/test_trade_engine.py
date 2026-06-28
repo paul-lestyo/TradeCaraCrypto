@@ -119,6 +119,10 @@ class _Alert:
         self.order_details = []
         self.protections = []
         self.closed = []
+        self.sent_alerts = []
+
+    async def send_alert(self, msg: str):
+        self.sent_alerts.append(msg)
 
     async def notify_new_order(self, *_):
         return None
@@ -343,12 +347,12 @@ async def test_tp_partial_sets_sl_plus_buffer_property():
     e = _engine()
     e.client.positions = [{"symbol": "BTCUSDT", "positionAmt": "0.1", "entryPrice": "100"}]
     await e.position_manager.add_position(
-        RunningPosition("BTCUSDT", Direction.LONG, Decimal("100"), Decimal("90"), [Decimal("99")], 50, "1", Decimal("0.1"), datetime.utcnow())
+        RunningPosition("BTCUSDT", Direction.LONG, Decimal("100"), Decimal("90"), [Decimal("95"), Decimal("99")], 50, "1", Decimal("0.1"), datetime.utcnow())
     )
     await e.execute_action(TradeAction(action=GeminiAction.TP_PARTIAL, pair="BTCUSDT", risk_level=RiskLevel.NORMAL))
     stop_orders = [o for o in e.client.orders if o.get("type") == "STOP_MARKET"]
     assert stop_orders
-    assert stop_orders[-1].get("stopPrice") == "100.1"
+    assert stop_orders[-1].get("stopPrice") == "95"
 
 
 @pytest.mark.asyncio
@@ -376,7 +380,7 @@ async def test_tp_partial_recovers_exchange_position_after_restart_property():
     )
     pos = e.position_manager.get_position("FIGHTUSDT")
     assert pos is not None
-    assert pos.quantity == Decimal("700.0")
+    assert pos.quantity == Decimal("300.0")
     assert not e.alert_service.errors
     partial_orders = [o for o in e.client.orders if o.get("reduceOnly") == "true"]
     assert partial_orders
@@ -454,6 +458,8 @@ async def test_order_without_entry_uses_market_reference_property():
             pair="PROMPTUSDT",
             direction=Direction.LONG,
             order_type=OrderType.LIMIT,
+            stop_loss=Decimal("90"),
+            take_profit_levels=[Decimal("110")],
             risk_level=RiskLevel.NORMAL,
         )
     )
@@ -474,12 +480,14 @@ async def test_margin_used_detail_uses_available_balance_and_effective_qty_prope
             action=GeminiAction.NEW_SIGNAL,
             pair="PROMPTUSDT",
             direction=Direction.LONG,
+            stop_loss=Decimal("90"),
+            take_profit_levels=[Decimal("110")],
             risk_level=RiskLevel.NORMAL,
         )
     )
     assert accepted is True
-    assert e.client.orders[0]["quantity"] == "0.51"
-    assert e.alert_service.order_details[-1][6] == "1.02"
+    assert e.client.orders[0]["quantity"] == "1.275"
+    assert e.alert_service.order_details[-1][6] == "2.55"
 
 
 @pytest.mark.asyncio
@@ -492,6 +500,8 @@ async def test_limit_order_normalizes_pair_and_stores_real_order_id_property():
             direction=Direction.LONG,
             order_type=OrderType.LIMIT,
             entry_price=Decimal("0.01"),
+            stop_loss=Decimal("0.009"),
+            take_profit_levels=[Decimal("0.012")],
             risk_level=RiskLevel.NORMAL,
         )
     )
@@ -524,11 +534,13 @@ async def test_limit_order_normalizes_price_and_quantity_by_symbol_filters_prope
             direction=Direction.LONG,
             order_type=OrderType.LIMIT,
             entry_price=Decimal("0.123456"),
+            stop_loss=Decimal("0.1"),
+            take_profit_levels=[Decimal("0.15")],
             risk_level=RiskLevel.NORMAL,
         )
     )
     assert accepted is True
-    assert e.client.orders[0]["quantity"] == "4050"
+    assert e.client.orders[0]["quantity"] == "10125"
     assert e.client.orders[0]["price"] == "0.1234"
 
 
@@ -559,13 +571,17 @@ async def test_short_entry_zone_limit_when_market_below_cheapest_area_property()
             direction=Direction.SHORT,
             order_type=OrderType.LIMIT,
             entry_zone=[Decimal("0.0060"), Decimal("0.0080")],
+            stop_loss=Decimal("0.0090"),
+            take_profit_levels=[Decimal("0.0050")],
             risk_level=RiskLevel.NORMAL,
         )
     )
     assert accepted is True
     assert e.client.orders[0]["type"] == "LIMIT"
-    assert e.client.orders[0]["price"] == "0.008"
-    assert e.position_manager.get_pending_position("BRETTUSDT").entry_price == Decimal("0.0080")
+    assert e.client.orders[0]["price"] == "0.006"
+    assert e.client.orders[1]["type"] == "LIMIT"
+    assert e.client.orders[1]["price"] == "0.008"
+    assert e.position_manager.get_pending_position("BRETTUSDT").entry_price == Decimal("0.0060")
 
 
 @pytest.mark.asyncio
@@ -595,13 +611,17 @@ async def test_long_entry_zone_limit_when_market_above_cheapest_area_property():
             direction=Direction.LONG,
             order_type=OrderType.LIMIT,
             entry_zone=[Decimal("0.0060"), Decimal("0.0080")],
+            stop_loss=Decimal("0.0050"),
+            take_profit_levels=[Decimal("0.0100")],
             risk_level=RiskLevel.NORMAL,
         )
     )
     assert accepted is True
     assert e.client.orders[0]["type"] == "LIMIT"
-    assert e.client.orders[0]["price"] == "0.006"
-    assert e.position_manager.get_pending_position("BRETTUSDT").entry_price == Decimal("0.0060")
+    assert e.client.orders[0]["price"] == "0.008"
+    assert e.client.orders[1]["type"] == "LIMIT"
+    assert e.client.orders[1]["price"] == "0.006"
+    assert e.position_manager.get_pending_position("BRETTUSDT").entry_price == Decimal("0.0080")
 
 
 @pytest.mark.asyncio
@@ -630,11 +650,15 @@ async def test_entry_zone_market_when_price_inside_or_below_area_property():
             pair="BRETTUSDT",
             direction=Direction.LONG,
             entry_zone=[Decimal("0.0060"), Decimal("0.0080")],
+            stop_loss=Decimal("0.0050"),
+            take_profit_levels=[Decimal("0.0100")],
             risk_level=RiskLevel.NORMAL,
         )
     )
     assert accepted is True
     assert e.client.orders[0]["type"] == "MARKET"
+    assert e.client.orders[1]["type"] == "LIMIT"
+    assert e.client.orders[1]["price"] == "0.006"
     assert e.position_manager.get_position("BRETTUSDT") is not None
 
 
@@ -664,11 +688,15 @@ async def test_short_entry_zone_market_when_price_inside_or_above_area_property(
             pair="BRETTUSDT",
             direction=Direction.SHORT,
             entry_zone=[Decimal("0.0060"), Decimal("0.0080")],
+            stop_loss=Decimal("0.0090"),
+            take_profit_levels=[Decimal("0.0050")],
             risk_level=RiskLevel.NORMAL,
         )
     )
     assert accepted is True
     assert e.client.orders[0]["type"] == "MARKET"
+    assert e.client.orders[1]["type"] == "LIMIT"
+    assert e.client.orders[1]["price"] == "0.008"
     assert e.position_manager.get_position("BRETTUSDT") is not None
 
 
@@ -699,6 +727,8 @@ async def test_order_type_market_override_forces_market_even_when_zone_would_lim
             direction=Direction.SHORT,
             order_type=OrderType.MARKET,
             entry_zone=[Decimal("0.0060"), Decimal("0.0080")],
+            stop_loss=Decimal("0.0090"),
+            take_profit_levels=[Decimal("0.0050")],
             risk_level=RiskLevel.NORMAL,
         )
     )
@@ -750,3 +780,82 @@ async def test_set_tp_sl_cleans_existing_algo_protection_orders_property():
     assert {"symbol": "PROMPTUSDT", "algoId": 88} in e.client.canceled_algo
     assert {"symbol": "PROMPTUSDT", "clientAlgoId": "sl-client-1"} in e.client.canceled_algo
     assert [o["type"] for o in e.client.orders[-2:]] == ["TAKE_PROFIT_MARKET", "STOP_MARKET"]
+
+
+@pytest.mark.asyncio
+async def test_strict_sl_tp_existence_guard_property():
+    e = _engine()
+    # Missing SL
+    accepted_no_sl = await e.execute_action(
+        TradeAction(
+            action=GeminiAction.NEW_SIGNAL,
+            pair="PROMPTUSDT",
+            direction=Direction.LONG,
+            take_profit_levels=[Decimal("110")],
+            risk_level=RiskLevel.NORMAL,
+        )
+    )
+    assert accepted_no_sl is False
+    assert "trade plan no SL TP" in e.alert_service.sent_alerts
+
+    # Missing TP
+    e.alert_service.sent_alerts.clear()
+    accepted_no_tp = await e.execute_action(
+        TradeAction(
+            action=GeminiAction.NEW_SIGNAL,
+            pair="PROMPTUSDT",
+            direction=Direction.LONG,
+            stop_loss=Decimal("90"),
+            risk_level=RiskLevel.NORMAL,
+        )
+    )
+    assert accepted_no_tp is False
+    assert "trade plan no SL TP" in e.alert_service.sent_alerts
+
+
+@pytest.mark.asyncio
+async def test_double_entry_size_and_routing_property():
+    class _ClientWithFilters(_Client):
+        def futures_exchange_info(self, **_):
+            return {
+                "symbols": [
+                    {
+                        "symbol": "BRETTUSDT",
+                        "filters": [
+                            {"filterType": "PRICE_FILTER", "tickSize": "0.0001"},
+                            {"filterType": "LOT_SIZE", "stepSize": "1"},
+                        ],
+                    }
+                ]
+            }
+
+        def mark_price(self, **_):
+            return {"markPrice": "0.0075"}
+
+    e = _engine(_ClientWithFilters())
+    accepted = await e.execute_action(
+        TradeAction(
+            action=GeminiAction.NEW_SIGNAL,
+            pair="BRETTUSDT",
+            direction=Direction.LONG,
+            entry_zone=[Decimal("0.0060"), Decimal("0.0080")],
+            stop_loss=Decimal("0.0050"),
+            take_profit_levels=[Decimal("0.0100")],
+            risk_level=RiskLevel.NORMAL,
+        )
+    )
+    assert accepted is True
+    # Entry 1 budget: 0.5% of 1000 = 5. Qty = 5 * 50 / 0.008 = 31250
+    # Entry 2 budget: 2% of 1000 = 20. Qty = 20 * 50 / 0.006 = 166666.6 -> 166666
+    # Mark price = 0.0075.
+    # Entry 1 (0.0080): market_price (0.0075) <= entry_1_price (0.0080) -> MARKET
+    # Entry 2 (0.0060): market_price (0.0075) <= entry_2_price (0.0060) -> LIMIT
+    
+    assert len(e.client.orders) == 4
+    assert e.client.orders[0]["type"] == "MARKET"
+    assert e.client.orders[0]["quantity"] == "31250"
+    assert e.client.orders[1]["type"] == "LIMIT"
+    assert e.client.orders[1]["price"] == "0.006"
+    assert e.client.orders[1]["quantity"] == "166666"
+    assert e.client.orders[2]["type"] == "TAKE_PROFIT_MARKET"
+    assert e.client.orders[3]["type"] == "STOP_MARKET"

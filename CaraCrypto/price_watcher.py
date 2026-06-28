@@ -103,24 +103,6 @@ class PriceWatcher:
                 if not getattr(pos, "tp2_notified", False):
                     await self.alert_service.notify_tp_hit(pair, str(tp2))
                     pos.tp2_notified = True
-                if (
-                    self.trade_engine
-                    and not getattr(pos, "tp2_sl_plus_applied", False)
-                    and hasattr(self.trade_engine, "_handle_set_sl_plus_buffer")
-                ):
-                    try:
-                        applied = await self.trade_engine._handle_set_sl_plus_buffer(
-                            pair,
-                            source="watcher_tp2_auto",
-                        )
-                        if applied:
-                            pos.tp2_sl_plus_applied = True
-                    except Exception as exc:
-                        print(f"[PriceWatcher] Failed to set SL+ buffer for {pair}: {exc}")
-                        await self.alert_service.notify_error(
-                            "watcher_sl_plus_failed",
-                            f"Gagal set SL+ breakeven untuk {pair}: {exc}"
-                        )
 
             if pos.current_sl is not None and self._check_sl_reached(pos.direction, current_price, pos.current_sl):
                 if pos.last_sl_alerted != pos.current_sl:
@@ -386,16 +368,19 @@ class PriceWatcher:
                 pos = self.position_manager.get_position(pair_for_pos)
             if pos and self.trade_engine:
                 print(f"[PriceWatcher] limit filled -> set_tp_sl_orders pair={action.pair}")
+                if hasattr(self.trade_engine, "_sync_position_with_exchange"):
+                    pos = await self.trade_engine._sync_position_with_exchange(pair_for_pos)
                 self._write_trades_json(
                     "limit_order_filled",
                     pair=pair_for_pos,
                     order_id=order_id,
-                    entry_price=pos.entry_price,
-                    quantity=pos.quantity,
+                    entry_price=pos.entry_price if pos else action.entry_price,
+                    quantity=pos.quantity if pos else Decimal("0"),
                     source="socket",
                 )
-                await self._safe_alert("notify_order_filled", pair, "limit", str(pos.entry_price))
-                await self.trade_engine._set_tp_sl_orders(pos)
+                await self._safe_alert("notify_order_filled", pair, "limit", str(pos.entry_price if pos else action.entry_price))
+                if pos:
+                    await self.trade_engine._set_tp_sl_orders(pos)
             if pos:
                 final_tp = None
                 if pos.tp_levels:
@@ -427,16 +412,19 @@ class PriceWatcher:
                 promoted = await promote_pending(pair) if callable(promote_pending) else None
                 pos = promoted if promoted else self.position_manager.get_position(pair)
             if pos and self.trade_engine:
+                if hasattr(self.trade_engine, "_sync_position_with_exchange"):
+                    pos = await self.trade_engine._sync_position_with_exchange(pair)
                 self._write_trades_json(
                     "limit_order_filled",
                     pair=pair,
                     order_id=order_id,
-                    entry_price=pos.entry_price,
-                    quantity=pos.quantity,
+                    entry_price=pos.entry_price if pos else Decimal("0"),
+                    quantity=pos.quantity if pos else Decimal("0"),
                     source="socket",
                 )
-                await self._safe_alert("notify_order_filled", pair, "limit", str(pos.entry_price))
-                await self.trade_engine._set_tp_sl_orders(pos)
+                await self._safe_alert("notify_order_filled", pair, "limit", str(pos.entry_price if pos else Decimal("0")))
+                if pos:
+                    await self.trade_engine._set_tp_sl_orders(pos)
         if order_type in {"TAKE_PROFIT_MARKET", "STOP_MARKET"} and status == "FILLED":
             close_type = "TP" if order_type == "TAKE_PROFIT_MARKET" else "SL"
             print(f"[PriceWatcher] protection order filled -> close_type={close_type} pair={pair}")

@@ -1,0 +1,151 @@
+/app/CaraCrypto/signal_parser.py:24: FutureWarning: 
+
+All support for the `google.generativeai` package has ended. It will no longer be receiving 
+updates or bug fixes. Please switch to the `google.genai` package as soon as possible.
+See README for more details:
+
+https://github.com/google-gemini/deprecated-generative-ai-python/blob/main/README.md
+
+  import google.generativeai as genai
+[Main] Starting CaraCrypto Trader...
+[Main] Database connected
+[2026-06-01 00:57:02 WIB] [SignalParser] Ready model=gemini-3.5-flash api_key=set
+[Main] Binance env=mainnet base=https://fapi.binance.com
+[Main] Watcher wired to engine
+[Main] Services initialized.
+[Main] Starting tasks: watcher, telegram listener, pipeline processor
+[PriceWatcher] Started
+[PriceWatcher] User data stream loop started
+[PriceWatcher] user stream connected url=wss://fstream.binance.com/ws/CCoxqTr8exQ3JRuBsgYWkWarT4ZWo0V7gRUZwP0GQeJjj1eY9hrwL2ymaMi7tLcn
+[SignalListener] Telegram connected
+[SignalListener] Monitoring groups: [-1002647537685, -1003629502181]
+[SignalListener] New message detected group=-1002647537685 topic=4 message_id=5248
+[SignalListener] Enqueued message_id=5248
+[Pipeline] Processing message_id=5248 group=-1002647537685
+[Context] message_id=5248 group=-1002647537685 topic=4 reply_to=4 message='[OPEN] PORTAL. Short.  Antri di kuning.' binance_running=[] binance_open_orders=[] closed_today=[] history_count=1
+[2026-06-01 09:31:28 WIB] [SignalParser] message_id=5248 group=-1002647537685 images=1 history=1
+[2026-06-01 09:31:38 WIB] [SignalParser] Gemini parsed payload={'action': 'new_signal', 'pair': 'PORTALUSDT', 'direction': 'short', 'entry_zone': [0.0552, 0.06043], 'entry_price': None, 'take_profit_levels': [0.05085, 0.04725, 0.04206, 0.03801, 0.03162], 'stop_loss': 0.06564, 'risk_level': None, 'close_percentage': None}
+[2026-06-01 09:31:38 WIB] [SignalParser] message_db_id=1 action=new_signal pair=PORTALUSDT risk=normal
+[Pipeline] message_id=5248 action=new_signal pair=PORTALUSDT
+[PriceWatcher] register_pending_order order_id=2569002028 pair=PORTALUSDT action=new_signal pending_count=1
+[PriceWatcher] subscribe pair=PORTALUSDT active=['PORTALUSDT']
+[Watcher] Subscribed pair=PORTALUSDT
+[SignalListener] New message detected group=-1002647537685 topic=4 message_id=5249
+[SignalListener] Enqueued message_id=5249
+[Pipeline] Processing message_id=5249 group=-1002647537685
+[Context] message_id=5249 group=-1002647537685 topic=4 reply_to=4 message='[OPEN] CHILLGUY. Long' binance_running=[] binance_open_orders=['PORTALUSDT'] closed_today=[] history_count=2
+[2026-06-01 10:38:20 WIB] [SignalParser] message_id=5249 group=-1002647537685 images=1 history=2
+[2026-06-01 10:38:28 WIB] [SignalParser] Gemini parsed payload={'action': 'new_signal', 'pair': 'CHILLGUYUSDT', 'direction': 'LONG', 'entry_zone': [0.009711, 0.010105], 'entry_price': None, 'take_profit_levels': [0.010418, 0.010869, 0.01137, 0.011907, 0.012484, 0.012808], 'stop_loss': 0.009329, 'risk_level': None, 'close_percentage': None}
+[2026-06-01 10:38:28 WIB] [SignalParser] message_db_id=2 action=new_signal pair=CHILLGUYUSDT risk=normal
+[Pipeline] message_id=5249 action=new_signal pair=CHILLGUYUSDT
+[PriceWatcher] register_pending_order order_id=1855475315 pair=CHILLGUYUSDT action=new_signal pending_count=2
+[PriceWatcher] subscribe pair=CHILLGUYUSDT active=['CHILLGUYUSDT', 'PORTALUSDT']
+[Watcher] Subscribed pair=CHILLGUYUSDT
+[SignalListener] New message detected group=-1002647537685 topic=4 message_id=5250
+[SignalListener] Enqueued message_id=5250
+[Pipeline] Processing message_id=5250 group=-1002647537685
+[Context] message_id=5250 group=-1002647537685 topic=4 reply_to=4 message='[OPEN] PORTAL. Long.  Selama gak break channel harusnya masih bisa naik. ENtry now, SL ungu' binance_running=[] binance_open_orders=['CHILLGUYUSDT', 'PORTALUSDT'] closed_today=[] history_count=3
+[2026-06-01 10:46:08 WIB] [SignalParser] message_id=5250 group=-1002647537685 images=1 history=3
+[2026-06-01 10:46:22 WIB] [SignalParser] Gemini parsed payload={'action': 'new_signal', 'pair': 'PORTALUSDT', 'direction': 'long', 'entry_zone': [0.04206, 0.045], 'entry_price': 0.0423, 'take_profit_levels': [0.04725, 0.05085, 0.0552, 0.06043], 'stop_loss': 0.03519, 'risk_level': None, 'close_percentage': None}
+[2026-06-01 10:46:22 WIB] [SignalParser] Text guard adjusted payload={'action': 'new_signal', 'pair': 'PORTALUSDT', 'direction': 'long', 'entry_zone': [0.04206, 0.045], 'entry_price': 0.0423, 'take_profit_levels': [0.04725, 0.05085, 0.0552, 0.06043], 'stop_loss': 0.03519, 'risk_level': None, 'close_percentage': None, 'order_type': 'market'}
+[2026-06-01 10:46:22 WIB] [SignalParser] message_db_id=3 action=new_signal pair=PORTALUSDT risk=normal
+[Pipeline] message_id=5250 action=new_signal pair=PORTALUSDT
+[PriceWatcher] subscribe pair=PORTALUSDT active=['CHILLGUYUSDT', 'PORTALUSDT']
+[Watcher] Subscribed pair=PORTALUSDT
+[SignalListener] Edit detected group=-1002647537685 message_id=5250
+[SignalListener] Edit detected group=-1002647537685 message_id=5250
+[SignalListener] New message detected group=-1002647537685 topic=4 message_id=5251
+[SignalListener] Enqueued message_id=5251
+[Pipeline] Processing message_id=5251 group=-1002647537685
+[Context] message_id=5251 group=-1002647537685 topic=4 reply_to=4 message='[OPEN] ARKM. Long.' binance_running=['PORTALUSDT'] binance_open_orders=['CHILLGUYUSDT', 'PORTALUSDT'] closed_today=[] history_count=4
+[2026-06-01 10:53:36 WIB] [SignalParser] message_id=5251 group=-1002647537685 images=1 history=4
+[2026-06-01 10:53:43 WIB] [SignalParser] Gemini parsed payload={'action': 'new_signal', 'pair': 'ARKMUSDT', 'direction': 'LONG', 'entry_zone': [0.1374, 0.1497], 'entry_price': None, 'take_profit_levels': [0.1604, 0.1724, 0.1897, 0.2044, 0.2142], 'stop_loss': 0.1298, 'risk_level': None, 'close_percentage': None}
+[2026-06-01 10:53:43 WIB] [SignalParser] message_db_id=4 action=new_signal pair=ARKMUSDT risk=normal
+[Pipeline] message_id=5251 action=new_signal pair=ARKMUSDT
+[PriceWatcher] subscribe pair=ARKMUSDT active=['ARKMUSDT', 'CHILLGUYUSDT', 'PORTALUSDT']
+[Watcher] Subscribed pair=ARKMUSDT
+[PriceWatcher] order_update order_id=1855475315 type=LIMIT side=None status=FILLED reduce_only=False close_position=False pair=CHILLGUYUSDT
+[PriceWatcher] limit filled -> set_tp_sl_orders pair=CHILLGUYUSDT
+[SignalListener] New message detected group=-1002647537685 topic=4 message_id=5252
+[SignalListener] Enqueued message_id=5252
+[Pipeline] Processing message_id=5252 group=-1002647537685
+[Context] message_id=5252 group=-1002647537685 topic=4 reply_to=5250 message='Hold = tp partial, set sl+' binance_running=['ARKMUSDT', 'CHILLGUYUSDT', 'PORTALUSDT'] binance_open_orders=['PORTALUSDT'] closed_today=[] history_count=5
+[2026-06-01 12:02:20 WIB] [SignalParser] message_id=5252 group=-1002647537685 images=2 history=5
+[SignalListener] Edit detected group=-1002647537685 message_id=5250
+[2026-06-01 12:02:34 WIB] [SignalParser] Gemini parsed payload={'action': 'update_sl', 'pair': 'PORTALUSDT', 'direction': 'long', 'entry_zone': None, 'entry_price': 0.0416761, 'take_profit_levels': None, 'stop_loss': 0.0416761, 'risk_level': None, 'close_percentage': None}
+[2026-06-01 12:02:34 WIB] [SignalParser] message_db_id=5 action=update_sl pair=PORTALUSDT risk=normal
+[Pipeline] message_id=5252 action=update_sl pair=PORTALUSDT
+[Pipeline][Error] message_id=5252 group=-1002647537685 err=APIError(code=-4130): An open stop or take profit order with GTE and closePosition in the direction is existing.
+[SignalListener] New message detected group=-1002647537685 topic=4 message_id=5254
+[SignalListener] Enqueued message_id=5254
+[Pipeline] Processing message_id=5254 group=-1002647537685
+[SignalListener] New message detected group=-1002647537685 topic=4 message_id=5255
+[SignalListener] Enqueued message_id=5255
+[Context] message_id=5254 group=-1002647537685 topic=4 reply_to=4 message='ARKM & CHILLGUY cutloss. Closing 4Hnya bearish.' binance_running=['ARKMUSDT', 'CHILLGUYUSDT'] binance_open_orders=['PORTALUSDT'] closed_today=[] history_count=6
+[2026-06-01 15:06:28 WIB] [SignalParser] message_id=5254 group=-1002647537685 images=1 history=6
+[2026-06-01 15:06:39 WIB] [SignalParser] Gemini parsed payload={'action': 'cutloss', 'pair': 'CHILLGUYUSDT', 'direction': 'long', 'entry_zone': None, 'entry_price': None, 'take_profit_levels': None, 'stop_loss': None, 'risk_level': None, 'close_percentage': 100}
+[2026-06-01 15:06:39 WIB] [SignalParser] message_db_id=6 action=cutloss pair=CHILLGUYUSDT risk=normal
+[Pipeline] message_id=5254 action=cutloss pair=CHILLGUYUSDT
+[SignalListener] Edit detected group=-1002647537685 message_id=5251
+[Pipeline] Processing message_id=5255 group=-1002647537685
+[Context] message_id=5255 group=-1002647537685 topic=4 reply_to=4 message='' binance_running=['ARKMUSDT', 'CHILLGUYUSDT'] binance_open_orders=['PORTALUSDT'] closed_today=['CHILLGUYUSDT'] history_count=7
+[2026-06-01 15:06:40 WIB] [SignalParser] message_id=5255 group=-1002647537685 images=1 history=7
+[SignalListener] Edit detected group=-1002647537685 message_id=5249
+[2026-06-01 15:06:50 WIB] [SignalParser] Gemini parsed payload={'action': 'cutloss', 'pair': 'ARKMUSDT', 'direction': 'long', 'entry_zone': None, 'entry_price': 0.1446455, 'take_profit_levels': None, 'stop_loss': None, 'risk_level': None, 'close_percentage': 100}
+[2026-06-01 15:06:50 WIB] [SignalParser] message_db_id=7 action=cutloss pair=ARKMUSDT risk=normal
+[Pipeline] message_id=5255 action=cutloss pair=ARKMUSDT
+[Pipeline] Processing message_id=5249 group=-1002647537685
+[Pipeline][Error] message_id=5249 group=-1002647537685 err=(sqlalchemy.dialects.postgresql.asyncpg.IntegrityError) <class 'asyncpg.exceptions.UniqueViolationError'>: duplicate key value violates unique constraint "uq_message_group"
+DETAIL:  Key (message_id, group_id)=(5249, -1002647537685) already exists.
+[SQL: INSERT INTO messages (message_id, group_id, topic_id, text, reply_to_message_id, reply_text, gemini_action, received_at, processed_at) VALUES ($1::BIGINT, $2::BIGINT, $3::BIGINT, $4::VARCHAR, $5::BIGINT, $6::VARCHAR, $7::VARCHAR, $8::TIMESTAMP WITH TIME ZONE, $9::TIMESTAMP WITH TIME ZONE) RETURNING messages.id]
+[parameters: (5249, -1002647537685, 4, '[CANCEL] CHILLGUY. Long ❌', None, None, None, datetime.datetime(2026, 6, 1, 8, 6, 53, 509968, tzinfo=datetime.timezone.utc), None)]
+(Background on this error at: https://sqlalche.me/e/20/gkpj)
+[PriceWatcher] pending order temporarily missing on exchange pair=PORTALUSDT order_id=2569002028 missing_count=1
+[PriceWatcher] pending order temporarily missing on exchange pair=PORTALUSDT order_id=2569002028 missing_count=2
+[PriceWatcher] pending order missing on exchange -> assume canceled pair=PORTALUSDT order_id=2569002028 missing_count=3
+[PriceWatcher] unsubscribe pair=PORTALUSDT active=['ARKMUSDT', 'CHILLGUYUSDT']
+[SignalListener] New message detected group=-1002647537685 topic=4 message_id=5256
+[SignalListener] Enqueued message_id=5256
+[Pipeline] Processing message_id=5256 group=-1002647537685
+[Context] message_id=5256 group=-1002647537685 topic=4 reply_to=4 message='[OPEN] SIREN. Long' binance_running=[] binance_open_orders=[] closed_today=['ARKMUSDT', 'CHILLGUYUSDT', 'PORTALUSDT'] history_count=8
+[2026-06-01 15:33:16 WIB] [SignalParser] message_id=5256 group=-1002647537685 images=1 history=8
+[2026-06-01 15:33:29 WIB] [SignalParser] Gemini parsed payload={'action': 'new_signal', 'pair': 'SIRENUSDT', 'direction': 'long', 'entry_zone': [0.5108, 0.5414], 'entry_price': None, 'take_profit_levels': [0.55, 0.561, 0.5801, 0.6018, 0.6199, 0.6522, 0.6976], 'stop_loss': 0.4902, 'risk_level': None, 'close_percentage': None}
+[2026-06-01 15:33:29 WIB] [SignalParser] message_db_id=9 action=new_signal pair=SIRENUSDT risk=normal
+[Pipeline] message_id=5256 action=new_signal pair=SIRENUSDT
+[PriceWatcher] register_pending_order order_id=4034344046 pair=SIRENUSDT action=new_signal pending_count=1
+[PriceWatcher] subscribe pair=SIRENUSDT active=['ARKMUSDT', 'CHILLGUYUSDT', 'SIRENUSDT']
+[Watcher] Subscribed pair=SIRENUSDT
+[SignalListener] New message detected group=-1002647537685 topic=4 message_id=5257
+[SignalListener] Enqueued message_id=5257
+[Pipeline] Processing message_id=5257 group=-1002647537685
+[Context] message_id=5257 group=-1002647537685 topic=4 reply_to=5256 message='SIREN hit TP 1. Hold = set SL+' binance_running=[] binance_open_orders=['SIRENUSDT'] closed_today=['ARKMUSDT', 'CHILLGUYUSDT', 'PORTALUSDT'] history_count=9
+[2026-06-01 16:43:22 WIB] [SignalParser] message_id=5257 group=-1002647537685 images=2 history=9
+[SignalListener] Edit detected group=-1002647537685 message_id=5256
+[2026-06-01 16:43:37 WIB] [SignalParser] Gemini parsed payload={'action': 'set_sl_breakeven', 'pair': 'SIRENUSDT', 'direction': 'long', 'entry_zone': None, 'entry_price': None, 'take_profit_levels': None, 'stop_loss': None, 'risk_level': None, 'close_percentage': None}
+[2026-06-01 16:43:37 WIB] [SignalParser] Text guard adjusted payload={'action': 'update_sl', 'pair': 'SIRENUSDT', 'direction': 'long', 'entry_zone': None, 'entry_price': None, 'take_profit_levels': None, 'stop_loss': None, 'risk_level': None, 'close_percentage': None}
+[2026-06-01 16:43:37 WIB] [SignalParser] message_db_id=10 action=update_sl pair=SIRENUSDT risk=normal
+[Pipeline] message_id=5257 action=update_sl pair=SIRENUSDT
+[SignalListener] New message detected group=-1002647537685 topic=4 message_id=5259
+[SignalListener] Enqueued message_id=5259
+[Pipeline] Processing message_id=5259 group=-1002647537685
+[Context] message_id=5259 group=-1002647537685 topic=4 reply_to=4 message='[OPEN] JCT. Short.  Very High Risk. SL lebar' binance_running=[] binance_open_orders=['SIRENUSDT'] closed_today=['ARKMUSDT', 'CHILLGUYUSDT', 'PORTALUSDT'] history_count=10
+[2026-06-01 17:31:18 WIB] [SignalParser] message_id=5259 group=-1002647537685 images=1 history=10
+[2026-06-01 17:31:28 WIB] [SignalParser] Gemini parsed payload={'action': 'new_signal', 'pair': 'JCTUSDT', 'direction': 'SHORT', 'entry_zone': [0.005376, 0.005725], 'entry_price': None, 'take_profit_levels': [0.00513, 0.004902, 0.00471, 0.004546, 0.004398], 'stop_loss': 0.006009, 'risk_level': 'very_high_risk', 'close_percentage': None}
+[2026-06-01 17:31:28 WIB] [SignalParser] message_db_id=11 action=new_signal pair=JCTUSDT risk=normal
+[Pipeline] message_id=5259 action=new_signal pair=JCTUSDT
+[PriceWatcher] subscribe pair=JCTUSDT active=['ARKMUSDT', 'CHILLGUYUSDT', 'JCTUSDT', 'SIRENUSDT']
+[Watcher] Subscribed pair=JCTUSDT
+[SignalListener] Edit detected group=-1002647537685 message_id=5259
+[SignalListener] New message detected group=-1002647537685 topic=4 message_id=5260
+[SignalListener] Enqueued message_id=5260
+[Pipeline] Processing message_id=5260 group=-1002647537685
+[Context] message_id=5260 group=-1002647537685 topic=4 reply_to=5259 message='JCT hit TP 1.' binance_running=['JCTUSDT'] binance_open_orders=['SIRENUSDT'] closed_today=['ARKMUSDT', 'CHILLGUYUSDT', 'PORTALUSDT'] history_count=10
+[2026-06-01 17:50:55 WIB] [SignalParser] message_id=5260 group=-1002647537685 images=2 history=10
+[2026-06-01 17:51:03 WIB] [SignalParser] Gemini parsed payload={'action': 'tp_partial', 'pair': 'JCTUSDT', 'direction': 'short', 'entry_zone': [0.005376, 0.005725], 'entry_price': None, 'take_profit_levels': [0.00513, 0.004902, 0.00471, 0.004546, 0.004398], 'stop_loss': 0.006009, 'risk_level': 'very_high', 'close_percentage': None}
+[2026-06-01 17:51:03 WIB] [SignalParser] message_db_id=12 action=tp_partial pair=JCTUSDT risk=normal
+[Pipeline] message_id=5260 action=tp_partial pair=JCTUSDT
+[Pipeline][Error] message_id=5260 group=-1002647537685 err=APIError(code=-4130): An open stop or take profit order with GTE and closePosition in the direction is existing.
+[PriceWatcher] pending order temporarily missing on exchange pair=SIRENUSDT order_id=4034344046 missing_count=1
+[PriceWatcher] pending order temporarily missing on exchange pair=SIRENUSDT order_id=4034344046 missing_count=2
+[PriceWatcher] pending order missing on exchange -> assume canceled pair=SIRENUSDT order_id=4034344046 missing_count=3
+[PriceWatcher] unsubscribe pair=SIRENUSDT active=['ARKMUSDT', 'CHILLGUYUSDT', 'JCTUSDT']
