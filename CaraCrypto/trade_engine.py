@@ -1757,14 +1757,59 @@ class TradeEngine:
                 f"skip pair={action.pair} reason=no_market_price",
             )
             return
+        is_double_entry = False
+        entry_2_filled = False
+        plan_row = await self.db.get_latest_trade_plan_message(pos.pair)
+        if plan_row:
+            plan_payload = plan_row.get("extracted_data") or {}
+            entry_zone = plan_payload.get("entry_zone")
+            if isinstance(entry_zone, list) and len(entry_zone) >= 2:
+                is_double_entry = True
+                try:
+                    ez = [Decimal(str(x)) for x in entry_zone]
+                    zone_low = min(ez[0], ez[1])
+                    zone_high = max(ez[0], ez[1])
+                    direction_str = plan_payload.get("direction")
+                    if direction_str:
+                        direction = Direction(direction_str.lower())
+                        entry_2_price = zone_low if direction == Direction.LONG else zone_high
+                        
+                        open_orders = self._get_open_orders(pos.pair)
+                        has_entry_2_open_order = False
+                        for order in open_orders:
+                            o_type = order.get("type") or order.get("origType")
+                            if o_type == "LIMIT":
+                                price_str = order.get("price")
+                                if price_str:
+                                    o_price = Decimal(str(price_str))
+                                    if abs(o_price - entry_2_price) / entry_2_price < Decimal("0.001"):
+                                        has_entry_2_open_order = True
+                                        break
+                        entry_2_filled = not has_entry_2_open_order
+                except Exception as e:
+                    self._write_audit_log("check_entry_2_filled_failed", pair=pos.pair, error=str(e))
+                    entry_2_filled = False
+
         reached_idx = self._resolve_reached_tp_index(pos, current_price)
-        if reached_idx != 1:
-            await self._safe_alert(
-                "notify_error",
-                "trade_engine_tp_partial",
-                f"skip pair={action.pair} reason=tp_level_not_tp2 reached_level=TP{reached_idx + 1}",
-            )
-            return
+        is_entry2_flow = is_double_entry and entry_2_filled
+
+        if is_entry2_flow:
+            if reached_idx not in {0, 1}:
+                await self._safe_alert(
+                    "notify_error",
+                    "trade_engine_tp_partial",
+                    f"skip pair={action.pair} reason=tp_level_not_allowed reached_level=TP{reached_idx + 1}",
+                )
+                return
+        else:
+            if reached_idx != 1:
+                await self._safe_alert(
+                    "notify_error",
+                    "trade_engine_tp_partial",
+                    f"skip pair={action.pair} reason=tp_level_not_tp2 reached_level=TP{reached_idx + 1}",
+                )
+                return
+
         if reached_idx <= pos.last_tp_partial_index_applied:
             await self._safe_alert(
                 "notify_error",
@@ -1773,9 +1818,13 @@ class TradeEngine:
             )
             return
 
-        close_percentage = 70.0
         ordered_tp = self._ordered_tp_levels(pos)
-        new_sl = ordered_tp[0] if ordered_tp else None
+        if is_entry2_flow and reached_idx == 0:
+            close_percentage = 50.0
+            new_sl = self._compute_sl_plus_from_entry(pos.direction, pos.entry_price)
+        else:
+            close_percentage = 70.0
+            new_sl = ordered_tp[0] if ordered_tp else None
 
         partial_ok, closed_qty, remaining_qty = await self._place_partial_close_market_order(pos, close_percentage)
         if not partial_ok:

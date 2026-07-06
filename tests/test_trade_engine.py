@@ -859,3 +859,107 @@ async def test_double_entry_size_and_routing_property():
     assert e.client.orders[1]["quantity"] == "166666"
     assert e.client.orders[2]["type"] == "TAKE_PROFIT_MARKET"
     assert e.client.orders[3]["type"] == "STOP_MARKET"
+
+
+@pytest.mark.asyncio
+async def test_tp_partial_double_entry_flow_entry2_filled_tp1_property():
+    e = _engine()
+    e.client.positions = [{"symbol": "BTCUSDT", "positionAmt": "0.5", "entryPrice": "92"}]
+    e.db.trade_plans["BTCUSDT"] = {
+        "id": 1,
+        "extracted_data": {
+            "entry_zone": ["90", "100"],
+            "direction": "LONG",
+        }
+    }
+    def mock_get_open_orders(symbol=None):
+        return []
+    e.client.futures_get_open_orders = mock_get_open_orders
+
+    pos = RunningPosition(
+        "BTCUSDT", Direction.LONG, Decimal("92"), Decimal("85"), [Decimal("100"), Decimal("110")], 50, "1", Decimal("0.5"), datetime.utcnow()
+    )
+    await e.position_manager.add_position(pos)
+
+    def mock_mark_price(symbol=None):
+        return {"markPrice": "100"}
+    e.client.mark_price = mock_mark_price
+
+    await e.execute_action(TradeAction(action=GeminiAction.TP_PARTIAL, pair="BTCUSDT", risk_level=RiskLevel.NORMAL))
+    
+    market_orders = [o for o in e.client.orders if o.get("type") == "MARKET" and o.get("reduceOnly") == "true"]
+    assert market_orders
+    assert market_orders[-1].get("quantity") == "0.25"
+    
+    stop_orders = [o for o in e.client.orders if o.get("type") == "STOP_MARKET"]
+    assert stop_orders
+    assert stop_orders[-1].get("stopPrice") == "92.092"
+    assert pos.last_tp_partial_index_applied == 0
+
+
+@pytest.mark.asyncio
+async def test_tp_partial_double_entry_flow_entry2_filled_tp2_property():
+    e = _engine()
+    e.client.positions = [{"symbol": "BTCUSDT", "positionAmt": "0.25", "entryPrice": "92"}]
+    e.db.trade_plans["BTCUSDT"] = {
+        "id": 1,
+        "extracted_data": {
+            "entry_zone": ["90", "100"],
+            "direction": "LONG",
+        }
+    }
+    def mock_get_open_orders(symbol=None):
+        return []
+    e.client.futures_get_open_orders = mock_get_open_orders
+
+    pos = RunningPosition(
+        "BTCUSDT", Direction.LONG, Decimal("92"), Decimal("92.092"), [Decimal("100"), Decimal("110")], 50, "1", Decimal("0.25"), datetime.utcnow(),
+        last_tp_partial_index_applied=0
+    )
+    await e.position_manager.add_position(pos)
+
+    def mock_mark_price(symbol=None):
+        return {"markPrice": "110"}
+    e.client.mark_price = mock_mark_price
+
+    await e.execute_action(TradeAction(action=GeminiAction.TP_PARTIAL, pair="BTCUSDT", risk_level=RiskLevel.NORMAL))
+    
+    market_orders = [o for o in e.client.orders if o.get("type") == "MARKET" and o.get("reduceOnly") == "true"]
+    assert market_orders
+    assert market_orders[-1].get("quantity") == "0.175"
+    
+    stop_orders = [o for o in e.client.orders if o.get("type") == "STOP_MARKET"]
+    assert stop_orders
+    assert stop_orders[-1].get("stopPrice") == "100"
+    assert pos.last_tp_partial_index_applied == 1
+
+
+@pytest.mark.asyncio
+async def test_tp_partial_double_entry_flow_entry2_not_filled_tp1_property():
+    e = _engine()
+    e.client.positions = [{"symbol": "BTCUSDT", "positionAmt": "0.1", "entryPrice": "100"}]
+    e.db.trade_plans["BTCUSDT"] = {
+        "id": 1,
+        "extracted_data": {
+            "entry_zone": ["90", "100"],
+            "direction": "LONG",
+        }
+    }
+    def mock_get_open_orders(symbol=None):
+        return [{"orderId": 999, "type": "LIMIT", "price": "90"}]
+    e.client.futures_get_open_orders = mock_get_open_orders
+
+    pos = RunningPosition(
+        "BTCUSDT", Direction.LONG, Decimal("100"), Decimal("85"), [Decimal("100"), Decimal("110")], 50, "1", Decimal("0.1"), datetime.utcnow()
+    )
+    await e.position_manager.add_position(pos)
+
+    def mock_mark_price(symbol=None):
+        return {"markPrice": "100"}
+    e.client.mark_price = mock_mark_price
+
+    await e.execute_action(TradeAction(action=GeminiAction.TP_PARTIAL, pair="BTCUSDT", risk_level=RiskLevel.NORMAL))
+    
+    market_orders = [o for o in e.client.orders if o.get("type") == "MARKET" and o.get("reduceOnly") == "true"]
+    assert not market_orders
+    assert pos.last_tp_partial_index_applied == -1

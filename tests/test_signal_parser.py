@@ -35,7 +35,7 @@ def test_tag_based_classification_hints_property():
     assert p._infer_action_hint("[CLOSED] ETH") == "new_signal"
     assert p._infer_action_hint("[CANCEL] XRP") == "cancel"
     assert p._infer_action_hint("USUAL kami cancel. Gak gerak.") == "cancel"
-    assert p._infer_action_hint("USUAL lanjut hold, persempit SL di 0.01285") == "update_sl"
+    assert p._infer_action_hint("USUAL lanjut hold, persempit SL+ di 0.01285") == "update_sl"
 
 
 def test_invalid_response_rejection_property():
@@ -147,7 +147,7 @@ def test_current_sl_update_text_overrides_old_reply_sl_property():
     p = _parser()
     context = MessageContext(
         current_message=RawSignalMessage(
-            text="USUAL lanjut hold, persempit SL di 0.01285",
+            text="USUAL lanjut hold, persempit SL+ di 0.01285",
             group_id=-1,
             message_id=5240,
             reply_text="[OPEN] USUAL old setup",

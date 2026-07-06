@@ -118,11 +118,11 @@ class SignalParser:
             return "new_signal"
         if re.search(r"\b(cut\s*loss|cutloss|cl)\b", lowered):
             return "cutloss"
-        if re.search(r"\b(sl|stop\s*loss)\b.*\b(be|bep|break\s*even|breakeven|modal)\b", lowered):
+        if re.search(r"\b(sl\+|stop\s*loss)(?!\w).*\b(be|bep|break\s*even|breakeven|modal)\b", lowered):
             return "set_sl_breakeven"
-        if re.search(r"\b(persempit|geser|pindah|naikkan|naikin|turunkan|turunin|ubah|update|set)\b.{0,40}\b(sl|stop\s*loss)\b", lowered):
+        if re.search(r"\b(persempit|geser|pindah|naikkan|naikin|turunkan|turunin|ubah|update|set)\b.{0,40}\b(sl\+|stop\s*loss)(?!\w)", lowered):
             return "update_sl"
-        if re.search(r"\b(sl|stop\s*loss)\b.{0,40}\b(di|ke|jadi|to|at)\b", lowered):
+        if re.search(r"\b(sl\+|stop\s*loss)(?!\w).{0,40}\b(di|ke|jadi|to|at)\b", lowered):
             return "update_sl"
         return "unknown"
 
@@ -168,7 +168,7 @@ class SignalParser:
         if not text:
             return None
         patterns = (
-            r"\bSL\b[^\d+-]{0,30}([0-9]+(?:[.,][0-9]+)?(?:\s*[KMB])?)",
+            r"\bSL\+?(?!\w)[^\d+-]{0,30}([0-9]+(?:[.,][0-9]+)?(?:\s*[KMB])?)",
             r"\bstop\s*loss\b[^\d+-]{0,30}([0-9]+(?:[.,][0-9]+)?(?:\s*[KMB])?)",
         )
         for pattern in patterns:
