@@ -31,3 +31,12 @@
 {"timestamp": "2026-06-28T17:59:40.553858+00:00", "event": "limit_order_filled", "pair": "BTCUSDT", "order_id": "oid1", "entry_price": "100", "quantity": "0.1", "source": "socket"}
 {"timestamp": "2026-06-28T17:59:40.556516+00:00", "event": "position_closed", "pair": "BTCUSDT", "reason": "TP", "source": "socket"}
 {"timestamp": "2026-06-28T17:59:40.561392+00:00", "event": "position_closed", "pair": "BTCUSDT", "reason": "manual_close", "source": "socket"}
+{"timestamp": "2026-07-01T01:13:16.949592+00:00", "event": "limit_order_filled", "pair": "STBLUSDT", "order_id": "1269157428", "entry_price": "0.02447454913880446", "quantity": "9870", "source": "socket"}
+{"timestamp": "2026-07-01T06:22:00.069790+00:00", "event": "limit_order_filled", "pair": "ENAUSDT", "order_id": "15329544593", "entry_price": "0.07229", "quantity": "667", "source": "socket"}
+{"timestamp": "2026-07-01T06:37:35.096060+00:00", "event": "limit_order_filled", "pair": "ENAUSDT", "order_id": "15329544656", "entry_price": "0.07169676776687481", "quantity": "3363", "source": "socket"}
+{"timestamp": "2026-07-01T14:07:22.843443+00:00", "event": "limit_order_filled", "pair": "LITUSDT", "order_id": "940901896", "entry_price": "1.8228", "quantity": "107.8", "source": "socket"}
+{"timestamp": "2026-07-02T08:32:55.090853+00:00", "event": "limit_order_filled", "pair": "SYNUSDT", "order_id": "2133050937", "entry_price": "0.52138", "quantity": "17", "source": "socket"}
+{"timestamp": "2026-07-02T15:32:52.422061+00:00", "event": "limit_order_filled", "pair": "SYNUSDT", "order_id": "2133050958", "entry_price": "0.5002903260869564", "quantity": "92", "source": "socket"}
+{"timestamp": "2026-07-03T04:09:43.716401+00:00", "event": "limit_order_filled", "pair": "ONDOUSDT", "order_id": "10148013222", "entry_price": "0.3304977038563438", "quantity": "679.4", "source": "socket"}
+{"timestamp": "2026-07-03T13:40:00.010513+00:00", "event": "limit_order_filled", "pair": "LITUSDT", "order_id": "988027980", "entry_price": "2.0787", "quantity": "21.1", "source": "socket"}
+{"timestamp": "2026-07-03T14:35:41.697891+00:00", "event": "limit_order_filled", "pair": "LITUSDT", "order_id": "988027982", "entry_price": "2.1109752646775743", "quantity": "103.9", "source": "socket"}

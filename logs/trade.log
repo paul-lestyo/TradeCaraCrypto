@@ -695,3 +695,364 @@
 {"ts_utc": "2026-06-28T17:59:40.757335+00:00", "event": "new_signal_rejected", "reason": "missing_sl_or_tp", "pair": "PROMPTUSDT", "message_db_id": null}
 {"ts_utc": "2026-06-28T17:59:40.759844+00:00", "event": "protection_set", "pair": "BRETTUSDT", "message_db_id": null, "order_id": "1001", "side": "long", "entry_price": "0.0080", "quantity": "3.125E+4", "leverage": 50, "stop_loss": "0.0050", "final_tp": "0.0100", "tp_levels": ["0.0100"]}
 {"ts_utc": "2026-06-28T17:59:40.760377+00:00", "event": "new_signal_executed", "pair": "BRETTUSDT", "message_db_id": null, "action": "new_signal", "side": "long", "order_type": "double_entry", "order_id": "1001", "order_id_1": "1001", "order_id_2": "1002", "requested_leverage": 50, "effective_leverage": 50, "account_balance": "1000", "risk_level": "normal", "entry_raw": "0.0080/0.0060", "entry_final": "0.0080/0.0060", "qty": "3.125E+4/166666", "margin_used": "25.000", "stop_loss": "0.0050", "take_profit": "0.0100", "entry_zone": ["0.0060", "0.0080"]}
+[Main] Starting CaraCrypto Trader...
+[Main] Database connected
+[2026-06-29 01:03:18 WIB] [SignalParser] Ready model=gemini-3.5-flash api_key=set
+[Main] Binance env=mainnet base=https://fapi.binance.com
+[Main] Watcher wired to engine
+{"ts_utc": "2026-06-28T18:03:19.016133+00:00", "event": "startup_reconcile_positions", "removed": ["BTCUSDT", "GPSUSDT", "MANAUSDT", "MAVUSDT", "REUSDT", "SOLUSDT"], "recovered": [], "kept": []}
+[Main] Startup reconcile kept=[] recovered=[] removed=['BTCUSDT', 'GPSUSDT', 'MANAUSDT', 'MAVUSDT', 'REUSDT', 'SOLUSDT']
+[PriceWatcher] register_pending_order order_id=3886295402 pair=MANTAUSDT action=new_signal pending_count=1
+[PriceWatcher] subscribe pair=MANTAUSDT active=['MANTAUSDT']
+[Main] Services initialized.
+[Main] Starting tasks: watcher, telegram listener, pipeline processor
+[PriceWatcher] Started
+[PriceWatcher] User data stream loop started
+[PriceWatcher] user stream connected url=wss://fstream.binance.com/ws/KUPPpdoeENwSjiYBxBJmjqrcEskMXnbTXhVSdyRHJDQhbVuFQAc3p9rZKSpXfwUA
+[SignalListener] Telegram connected
+[SignalListener] Monitoring groups: [-1002647537685, -1003629502181]
+[PriceWatcher] pending order temporarily missing on exchange pair=MANTAUSDT order_id=3886295402 missing_count=1
+[PriceWatcher] pending order temporarily missing on exchange pair=MANTAUSDT order_id=3886295402 missing_count=2
+[PriceWatcher] pending order missing on exchange -> assume canceled pair=MANTAUSDT order_id=3886295402 missing_count=3
+[PriceWatcher] unsubscribe pair=MANTAUSDT active=[]
+[SignalListener] New message detected group=-1002647537685 topic=4 message_id=5578
+[SignalListener] Enqueued message_id=5578
+[Pipeline] Processing message_id=5578 group=-1002647537685
+[Context] message_id=5578 group=-1002647537685 topic=4 reply_to=4 message='[OPEN] BEAMX. Long.  Confirmed breakut. Low risk entry di kuning. Kalo BTC masih sideways mestinya aman.' binance_running=[] binance_open_orders=[] closed_today=['BTCUSDT', 'GPSUSDT', 'MANAUSDT', 'MANTAUSDT', 'MAVUSDT', 'REUSDT', 'SOLUSDT'] history_count=10
+[2026-06-29 12:41:22 WIB] [SignalParser] message_id=5578 group=-1002647537685 images=1 history=10
+[2026-06-29 12:41:31 WIB] [SignalParser] Gemini parsed payload={'action': 'new_signal', 'pair': 'BEAMXUSDT', 'direction': 'long', 'entry_zone': [0.001306, 0.001354], 'entry_price': None, 'take_profit_levels': [0.001412, 0.00147, 0.001506, 0.001558, 0.001626], 'stop_loss': 0.00125, 'risk_level': 'low', 'close_percentage': None}
+[2026-06-29 12:41:31 WIB] [SignalParser] message_db_id=192 action=new_signal pair=BEAMXUSDT risk=normal
+[Pipeline] message_id=5578 action=new_signal pair=BEAMXUSDT
+[PriceWatcher] register_pending_order order_id=3200281870 pair=BEAMXUSDT action=new_signal pending_count=1
+{"ts_utc": "2026-06-29T05:41:38.017008+00:00", "event": "new_signal_executed", "pair": "BEAMXUSDT", "message_db_id": 192, "action": "new_signal", "side": "long", "order_type": "limit", "order_id": "3200281870", "requested_leverage": 50, "effective_leverage": 50, "account_balance": "185.96199306", "risk_level": "normal", "entry_raw": "0.001306", "entry_final": "0.0013060", "qty": "71195", "margin_used": "1.8596134", "stop_loss": "0.001250", "take_profit": "0.0016260", "entry_zone": ["0.001306", "0.001354"]}
+[PriceWatcher] subscribe pair=BEAMXUSDT active=['BEAMXUSDT']
+[Watcher] Subscribed pair=BEAMXUSDT
+[SignalListener] New message detected group=-1002647537685 topic=4 message_id=5579
+[SignalListener] Enqueued message_id=5579
+[Pipeline] Processing message_id=5579 group=-1002647537685
+[Context] message_id=5579 group=-1002647537685 topic=4 reply_to=4 message='[OPEN] HYPE. Long.  High risk karena belum terkonfirmasi breakout.' binance_running=[] binance_open_orders=['BEAMXUSDT'] closed_today=['BTCUSDT', 'GPSUSDT', 'MANAUSDT', 'MANTAUSDT', 'MAVUSDT', 'REUSDT', 'SOLUSDT'] history_count=10
+[2026-06-29 12:53:50 WIB] [SignalParser] message_id=5579 group=-1002647537685 images=1 history=10
+[2026-06-29 12:53:56 WIB] [SignalParser] Gemini parsed payload={'action': 'new_signal', 'pair': 'HYPEUSDT', 'direction': 'long', 'entry_zone': [60.556, 63.151], 'entry_price': None, 'take_profit_levels': [65.247, 67.545, 69.776, 72.223, 75.522], 'stop_loss': 57.52, 'risk_level': 'high', 'close_percentage': None}
+[2026-06-29 12:53:56 WIB] [SignalParser] message_db_id=193 action=new_signal pair=HYPEUSDT risk=high
+[Pipeline] message_id=5579 action=new_signal pair=HYPEUSDT
+{"ts_utc": "2026-06-29T05:53:58.202434+00:00", "event": "protection_set", "pair": "HYPEUSDT", "message_db_id": 193, "order_id": "10062892804", "side": "long", "entry_price": "62.55038916", "quantity": "0.7358162840085518022698741592", "leverage": 50, "stop_loss": "57.52", "final_tp": "75.522", "tp_levels": ["65.247", "67.545", "69.776", "72.223", "75.522"]}
+{"ts_utc": "2026-06-29T05:53:58.786548+00:00", "event": "new_signal_executed", "pair": "HYPEUSDT", "message_db_id": 193, "action": "new_signal", "side": "long", "order_type": "market", "order_id": "10062892804", "requested_leverage": 50, "effective_leverage": 50, "account_balance": "184.10237966", "risk_level": "high", "entry_raw": "60.556", "entry_final": "62.55038916", "qty": "0.73", "margin_used": "0.913235681736", "stop_loss": "57.5200", "take_profit": "75.52200", "entry_zone": ["60.556", "63.151"]}
+[PriceWatcher] subscribe pair=HYPEUSDT active=['BEAMXUSDT', 'HYPEUSDT']
+[Watcher] Subscribed pair=HYPEUSDT
+[Main] Starting CaraCrypto Trader...
+[Main] Database connected
+[2026-06-29 14:55:12 WIB] [SignalParser] Ready model=gemini-3.5-flash api_key=set
+[Main] Binance env=mainnet base=https://fapi.binance.com
+[Main] Watcher wired to engine
+{"ts_utc": "2026-06-29T07:55:12.754309+00:00", "event": "startup_reconcile_positions", "removed": [], "recovered": [], "kept": ["HYPEUSDT"]}
+[Main] Startup reconcile kept=['HYPEUSDT'] recovered=[] removed=[]
+[PriceWatcher] subscribe pair=HYPEUSDT active=['HYPEUSDT']
+[PriceWatcher] register_pending_order order_id=3200281870 pair=BEAMXUSDT action=new_signal pending_count=1
+[PriceWatcher] subscribe pair=BEAMXUSDT active=['BEAMXUSDT', 'HYPEUSDT']
+[Main] Services initialized.
+[Main] Starting tasks: watcher, telegram listener, pipeline processor
+[PriceWatcher] Started
+[PriceWatcher] User data stream loop started
+[PriceWatcher] user stream connected url=wss://fstream.binance.com/ws/KUPPpdoeENwSjiYBxBJmjqrcEskMXnbTXhVSdyRHJDQhbVuFQAc3p9rZKSpXfwUA
+[SignalListener] Telegram connected
+[SignalListener] Monitoring groups: [-1002647537685, -1003629502181]
+[SignalListener] New message detected group=-1002647537685 topic=4 message_id=5580
+[SignalListener] Enqueued message_id=5580
+[Pipeline] Processing message_id=5580 group=-1002647537685
+[Context] message_id=5580 group=-1002647537685 topic=4 reply_to=4 message='[OPEN] RE. Long  Breakout & retest.' binance_running=['HYPEUSDT'] binance_open_orders=['BEAMXUSDT'] closed_today=[] history_count=10
+[2026-06-29 14:56:04 WIB] [SignalParser] message_id=5580 group=-1002647537685 images=1 history=10
+[2026-06-29 14:56:11 WIB] [SignalParser] Gemini parsed payload={'action': 'new_signal', 'pair': 'REUSDT', 'direction': 'long', 'entry_zone': [0.5888, 0.632], 'entry_price': None, 'take_profit_levels': [0.6961, 0.7704, 0.8747, 0.9641, 1.0706], 'stop_loss': 0.5124, 'risk_level': None, 'close_percentage': None}
+[2026-06-29 14:56:11 WIB] [SignalParser] message_db_id=194 action=new_signal pair=REUSDT risk=normal
+[Pipeline] message_id=5580 action=new_signal pair=REUSDT
+[PriceWatcher] register_pending_order order_id=432633090 pair=REUSDT action=new_signal pending_count=2
+{"ts_utc": "2026-06-29T07:56:14.227761+00:00", "event": "protection_set", "pair": "REUSDT", "message_db_id": 194, "order_id": "432633082", "side": "long", "entry_price": "0.632000", "quantity": "72", "leverage": 50, "stop_loss": "0.5124", "final_tp": "1.0706", "tp_levels": ["0.6961", "0.7704", "0.8747", "0.9641", "1.0706"]}
+{"ts_utc": "2026-06-29T07:56:14.879172+00:00", "event": "new_signal_executed", "pair": "REUSDT", "message_db_id": 194, "action": "new_signal", "side": "long", "order_type": "double_entry", "order_id": "432633082", "order_id_1": "432633082", "order_id_2": "432633090", "requested_leverage": 50, "effective_leverage": 50, "account_balance": "183.18928107", "risk_level": "normal", "entry_raw": "0.632000/0.5888000", "entry_final": "0.632000/0.5888000", "qty": "72/311", "margin_used": "4.57973202675", "stop_loss": "0.5124000", "take_profit": "1.0706000", "entry_zone": ["0.5888", "0.632"]}
+[PriceWatcher] subscribe pair=REUSDT active=['BEAMXUSDT', 'HYPEUSDT', 'REUSDT']
+[Watcher] Subscribed pair=REUSDT
+[SignalListener] New message detected group=-1002647537685 topic=4 message_id=5581
+[SignalListener] Enqueued message_id=5581
+[Pipeline] Processing message_id=5581 group=-1002647537685
+[Context] message_id=5581 group=-1002647537685 topic=4 reply_to=4 message='~ Fyi, 3 sinyal di atas pake outlook 4H, biasanya bakal boring, lama, dan naik turun.' binance_running=['HYPEUSDT', 'REUSDT'] binance_open_orders=['BEAMXUSDT', 'REUSDT'] closed_today=[] history_count=10
+[2026-06-29 14:57:59 WIB] [SignalParser] message_id=5581 group=-1002647537685 images=0 history=10
+[2026-06-29 14:58:03 WIB] [SignalParser] Gemini parsed payload={'action': 'skip', 'pair': None, 'direction': None, 'entry_zone': None, 'entry_price': None, 'take_profit_levels': None, 'stop_loss': None, 'risk_level': None, 'close_percentage': None}
+[2026-06-29 14:58:03 WIB] [SignalParser] message_db_id=195 action=skip pair=None risk=normal
+[Pipeline] message_id=5581 action=skip
+[SignalListener] New message detected group=-1002647537685 topic=4 message_id=5582
+[SignalListener] Enqueued message_id=5582
+[Pipeline] Processing message_id=5582 group=-1002647537685
+[Context] message_id=5582 group=-1002647537685 topic=4 reply_to=5580 message='RE hit TP1' binance_running=['HYPEUSDT', 'REUSDT'] binance_open_orders=['BEAMXUSDT', 'REUSDT'] closed_today=[] history_count=10
+[2026-06-29 18:23:02 WIB] [SignalParser] message_id=5582 group=-1002647537685 images=2 history=10
+[2026-06-29 18:23:08 WIB] [SignalParser] Gemini parsed payload={'action': 'tp_partial', 'pair': 'REUSDT', 'direction': 'long', 'entry_zone': None, 'entry_price': None, 'take_profit_levels': None, 'stop_loss': None, 'risk_level': None, 'close_percentage': None}
+[2026-06-29 18:23:08 WIB] [SignalParser] message_db_id=196 action=tp_partial pair=REUSDT risk=normal
+[Pipeline] message_id=5582 action=tp_partial pair=REUSDT
+[SignalListener] Edit detected group=-1002647537685 message_id=5580
+[SignalListener] Edit detected group=-1002647537685 message_id=5578
+[SignalListener] New message detected group=-1002647537685 topic=4 message_id=5583
+[SignalListener] Enqueued message_id=5583
+[Pipeline] Processing message_id=5583 group=-1002647537685
+[Context] message_id=5583 group=-1002647537685 topic=4 reply_to=5580 message='RE hit TP 2' binance_running=['HYPEUSDT', 'REUSDT'] binance_open_orders=['BEAMXUSDT', 'REUSDT'] closed_today=[] history_count=10
+[2026-06-29 18:46:56 WIB] [SignalParser] message_id=5583 group=-1002647537685 images=2 history=10
+[2026-06-29 18:47:03 WIB] [SignalParser] Gemini parsed payload={'action': 'tp_partial', 'pair': 'REUSDT', 'direction': 'long', 'entry_zone': None, 'entry_price': None, 'take_profit_levels': None, 'stop_loss': None, 'risk_level': None, 'close_percentage': None}
+[2026-06-29 18:47:03 WIB] [SignalParser] message_db_id=197 action=tp_partial pair=REUSDT risk=normal
+[Pipeline] message_id=5583 action=tp_partial pair=REUSDT
+{"ts_utc": "2026-06-29T11:47:05.113909+00:00", "event": "tp_partial_executed", "pair": "REUSDT", "message_db_id": 197, "tp_reached_index": 2, "market_price": "0.77470697", "partial_close_percent": 70.0, "closed_qty": "50", "remaining_qty": "22", "new_stop_loss": "0.6961"}
+[SignalListener] New message detected group=-1002647537685 topic=4 message_id=5584
+[SignalListener] Enqueued message_id=5584
+[Pipeline] Processing message_id=5584 group=-1002647537685
+[Context] message_id=5584 group=-1002647537685 topic=4 reply_to=5578 message='BEAMX hit TP1' binance_running=['HYPEUSDT', 'REUSDT'] binance_open_orders=['BEAMXUSDT', 'REUSDT'] closed_today=[] history_count=10
+[2026-06-29 18:47:14 WIB] [SignalParser] message_id=5584 group=-1002647537685 images=2 history=10
+[2026-06-29 18:47:21 WIB] [SignalParser] Gemini parsed payload={'action': 'tp_partial', 'pair': 'BEAMXUSDT', 'direction': 'long', 'entry_zone': None, 'entry_price': None, 'take_profit_levels': None, 'stop_loss': None, 'risk_level': None, 'close_percentage': None}
+[2026-06-29 18:47:21 WIB] [SignalParser] message_db_id=198 action=tp_partial pair=BEAMXUSDT risk=normal
+[Pipeline] message_id=5584 action=tp_partial pair=BEAMXUSDT
+[PriceWatcher] pending order temporarily missing on exchange pair=REUSDT order_id=432633090 missing_count=1
+[PriceWatcher] pending order temporarily missing on exchange pair=BEAMXUSDT order_id=3200281870 missing_count=1
+[PriceWatcher] pending order temporarily missing on exchange pair=REUSDT order_id=432633090 missing_count=2
+[PriceWatcher] pending order temporarily missing on exchange pair=BEAMXUSDT order_id=3200281870 missing_count=2
+[PriceWatcher] pending order missing on exchange -> assume canceled pair=REUSDT order_id=432633090 missing_count=3
+[PriceWatcher] unsubscribe pair=REUSDT active=['BEAMXUSDT', 'HYPEUSDT']
+[PriceWatcher] pending order missing on exchange -> assume canceled pair=BEAMXUSDT order_id=3200281870 missing_count=3
+[PriceWatcher] unsubscribe pair=BEAMXUSDT active=['HYPEUSDT']
+[SignalListener] New message detected group=-1002647537685 topic=4 message_id=5587
+[SignalListener] Enqueued message_id=5587
+[Pipeline] Processing message_id=5587 group=-1002647537685
+[Context] message_id=5587 group=-1002647537685 topic=4 reply_to=4 message='~ Asia London anyep. Gak ada setup menarik 🧐' binance_running=['HYPEUSDT'] binance_open_orders=[] closed_today=['BEAMXUSDT', 'REUSDT'] history_count=10
+[2026-06-30 17:36:08 WIB] [SignalParser] message_id=5587 group=-1002647537685 images=0 history=10
+[2026-06-30 17:36:14 WIB] [SignalParser] Gemini parsed payload={'action': 'skip', 'pair': None, 'direction': None, 'entry_zone': None, 'entry_price': None, 'take_profit_levels': None, 'stop_loss': None, 'risk_level': None, 'close_percentage': None}
+[2026-06-30 17:36:14 WIB] [SignalParser] message_db_id=199 action=skip pair=None risk=normal
+[Pipeline] message_id=5587 action=skip
+[SignalListener] New message detected group=-1002647537685 topic=4 message_id=5588
+[SignalListener] Enqueued message_id=5588
+[Pipeline] Processing message_id=5588 group=-1002647537685
+[Context] message_id=5588 group=-1002647537685 topic=4 reply_to=4 message='[OPEN] STBL. Long.  Breakout & retest.  Outlook 4H, SL lebar. High risk buat yg pakai high leverage.' binance_running=['HYPEUSDT'] binance_open_orders=[] closed_today=['BEAMXUSDT', 'REUSDT'] history_count=10
+[2026-06-30 18:33:17 WIB] [SignalParser] message_id=5588 group=-1002647537685 images=1 history=10
+[2026-06-30 18:33:26 WIB] [SignalParser] Gemini parsed payload={'action': 'new_signal', 'pair': 'STBLUSDT', 'direction': 'LONG', 'entry_zone': [0.02418, 0.02637], 'entry_price': None, 'take_profit_levels': [0.02736, 0.02855, 0.03025, 0.03174, 0.03342], 'stop_loss': 0.02157, 'risk_level': 'high', 'close_percentage': None}
+[2026-06-30 18:33:26 WIB] [SignalParser] message_db_id=200 action=new_signal pair=STBLUSDT risk=high
+[Pipeline] message_id=5588 action=new_signal pair=STBLUSDT
+[PriceWatcher] register_pending_order order_id=1269157428 pair=STBLUSDT action=new_signal pending_count=1
+{"ts_utc": "2026-06-30T11:33:28.301461+00:00", "event": "protection_set", "pair": "STBLUSDT", "message_db_id": 200, "order_id": "1269157423", "side": "long", "entry_price": "0.0263700", "quantity": "1840", "leverage": 50, "stop_loss": "0.02157", "final_tp": "0.03342", "tp_levels": ["0.02736", "0.02855", "0.03025", "0.03174", "0.03342"]}
+{"ts_utc": "2026-06-30T11:33:29.073444+00:00", "event": "new_signal_executed", "pair": "STBLUSDT", "message_db_id": 200, "action": "new_signal", "side": "long", "order_type": "double_entry", "order_id": "1269157423", "order_id_1": "1269157423", "order_id_2": "1269157428", "requested_leverage": 50, "effective_leverage": 50, "account_balance": "194.17539612", "risk_level": "high", "entry_raw": "0.0263700/0.0241800", "entry_final": "0.0263700/0.0241800", "qty": "1840/8030", "margin_used": "4.85438490300", "stop_loss": "0.0215700", "take_profit": "0.0334200", "entry_zone": ["0.02418", "0.02637"]}
+[PriceWatcher] subscribe pair=STBLUSDT active=['HYPEUSDT', 'STBLUSDT']
+[Watcher] Subscribed pair=STBLUSDT
+[PriceWatcher] order_update order_id=1269157428 type=LIMIT side=None status=FILLED reduce_only=False close_position=False pair=STBLUSDT
+[PriceWatcher] limit filled -> set_tp_sl_orders pair=STBLUSDT
+{"ts_utc": "2026-07-01T01:13:16.911616+00:00", "event": "position_synced_with_exchange", "pair": "STBLUSDT", "entry_price": "0.02447454913880446", "quantity": "9870", "leverage": 50}
+{"ts_utc": "2026-07-01T01:13:18.397991+00:00", "event": "protection_set", "pair": "STBLUSDT", "message_db_id": 200, "order_id": "1269157423", "side": "long", "entry_price": "0.02447454913880446", "quantity": "9870", "leverage": 50, "stop_loss": "0.02157", "final_tp": "0.03342", "tp_levels": ["0.02736", "0.02855", "0.03025", "0.03174", "0.03342"]}
+[SignalListener] New message detected group=-1002647537685 topic=4 message_id=5591
+[SignalListener] Enqueued message_id=5591
+[Pipeline] Processing message_id=5591 group=-1002647537685
+[Context] message_id=5591 group=-1002647537685 topic=4 reply_to=4 message='[OPEN] LIT. Long.' binance_running=['HYPEUSDT', 'STBLUSDT'] binance_open_orders=[] closed_today=['BEAMXUSDT', 'REUSDT'] history_count=10
+[2026-07-01 09:21:52 WIB] [SignalParser] message_id=5591 group=-1002647537685 images=1 history=10
+[2026-07-01 09:22:01 WIB] [SignalParser] Gemini parsed payload={'action': 'new_signal', 'pair': 'LITUSDT', 'direction': 'LONG', 'entry_zone': [1.8228, 1.8673], 'entry_price': None, 'take_profit_levels': [1.9335, 1.9852, 2.0351, 2.1051, 2.2431], 'stop_loss': 1.7721, 'risk_level': None, 'close_percentage': None}
+[2026-07-01 09:22:01 WIB] [SignalParser] message_db_id=201 action=new_signal pair=LITUSDT risk=normal
+[Pipeline] message_id=5591 action=new_signal pair=LITUSDT
+[PriceWatcher] register_pending_order order_id=940901896 pair=LITUSDT action=new_signal pending_count=1
+{"ts_utc": "2026-07-01T02:22:03.466596+00:00", "event": "protection_set", "pair": "LITUSDT", "message_db_id": 201, "order_id": "940901888", "side": "long", "entry_price": "1.867300", "quantity": "26.3", "leverage": 50, "stop_loss": "1.7721", "final_tp": "2.2431", "tp_levels": ["1.9335", "1.9852", "2.0351", "2.1051", "2.2431"]}
+{"ts_utc": "2026-07-01T02:22:04.401540+00:00", "event": "new_signal_executed", "pair": "LITUSDT", "message_db_id": 201, "action": "new_signal", "side": "long", "order_type": "double_entry", "order_id": "940901888", "order_id_1": "940901888", "order_id_2": "940901896", "requested_leverage": 50, "effective_leverage": 50, "account_balance": "196.67623574", "risk_level": "normal", "entry_raw": "1.867300/1.822800", "entry_final": "1.867300/1.822800", "qty": "26.3/107.8", "margin_used": "4.91690589350", "stop_loss": "1.772100", "take_profit": "2.243100", "entry_zone": ["1.8228", "1.8673"]}
+[PriceWatcher] subscribe pair=LITUSDT active=['HYPEUSDT', 'LITUSDT', 'STBLUSDT']
+[Watcher] Subscribed pair=LITUSDT
+[SignalListener] New message detected group=-1002647537685 topic=4 message_id=5592
+[SignalListener] Enqueued message_id=5592
+[Pipeline] Processing message_id=5592 group=-1002647537685
+[Context] message_id=5592 group=-1002647537685 topic=4 reply_to=4 message='[OPEN] ENA. Long.  Entry limit kuning, tunggu pullback' binance_running=['HYPEUSDT', 'LITUSDT', 'STBLUSDT'] binance_open_orders=['LITUSDT'] closed_today=['BEAMXUSDT', 'REUSDT'] history_count=10
+[2026-07-01 12:21:52 WIB] [SignalParser] message_id=5592 group=-1002647537685 images=1 history=10
+[2026-07-01 12:22:00 WIB] [SignalParser] Gemini parsed payload={'action': 'new_signal', 'pair': 'ENAUSDT', 'direction': 'long', 'entry_zone': [0.07155, 0.07229], 'entry_price': None, 'take_profit_levels': [0.07465, 0.07649, 0.07794, 0.07901], 'stop_loss': 0.06952, 'risk_level': 'normal', 'close_percentage': None}
+[2026-07-01 12:22:00 WIB] [SignalParser] message_db_id=202 action=new_signal pair=ENAUSDT risk=normal
+[Pipeline] message_id=5592 action=new_signal pair=ENAUSDT
+[PriceWatcher] register_pending_order order_id=15329544593 pair=ENAUSDT action=new_signal pending_count=2
+[PriceWatcher] register_pending_order order_id=15329544656 pair=ENAUSDT action=new_signal pending_count=3
+{"ts_utc": "2026-07-01T05:22:02.134723+00:00", "event": "new_signal_executed", "pair": "ENAUSDT", "message_db_id": 202, "action": "new_signal", "side": "long", "order_type": "double_entry", "order_id": "15329544593", "order_id_1": "15329544593", "order_id_2": "15329544656", "requested_leverage": 50, "effective_leverage": 50, "account_balance": "192.94868384", "risk_level": "normal", "entry_raw": "0.0722900/0.0715500", "entry_final": "0.0722900/0.0715500", "qty": "667/2696", "margin_used": "4.82371709600", "stop_loss": "0.0695200", "take_profit": "0.0790100", "entry_zone": ["0.07155", "0.07229"]}
+[PriceWatcher] subscribe pair=ENAUSDT active=['ENAUSDT', 'HYPEUSDT', 'LITUSDT', 'STBLUSDT']
+[Watcher] Subscribed pair=ENAUSDT
+[PriceWatcher] order_update order_id=15329544593 type=LIMIT side=None status=FILLED reduce_only=False close_position=False pair=ENAUSDT
+[PriceWatcher] limit filled -> set_tp_sl_orders pair=ENAUSDT
+{"ts_utc": "2026-07-01T06:22:00.068729+00:00", "event": "position_synced_with_exchange", "pair": "ENAUSDT", "entry_price": "0.07229", "quantity": "667", "leverage": 50}
+{"ts_utc": "2026-07-01T06:22:00.796796+00:00", "event": "protection_set", "pair": "ENAUSDT", "message_db_id": 202, "order_id": "15329544593", "side": "long", "entry_price": "0.07229", "quantity": "667", "leverage": 50, "stop_loss": "0.06952", "final_tp": "0.07901", "tp_levels": ["0.07465", "0.07649", "0.07794", "0.07901"]}
+[PriceWatcher] order_update order_id=15329544656 type=LIMIT side=None status=FILLED reduce_only=False close_position=False pair=ENAUSDT
+[PriceWatcher] limit filled -> set_tp_sl_orders pair=ENAUSDT
+{"ts_utc": "2026-07-01T06:37:35.095895+00:00", "event": "position_synced_with_exchange", "pair": "ENAUSDT", "entry_price": "0.07169676776687481", "quantity": "3363", "leverage": 50}
+{"ts_utc": "2026-07-01T06:37:36.069500+00:00", "event": "protection_set", "pair": "ENAUSDT", "message_db_id": 202, "order_id": "15329544593", "side": "long", "entry_price": "0.07169676776687481", "quantity": "3363", "leverage": 50, "stop_loss": "0.06952", "final_tp": "0.07901", "tp_levels": ["0.07465", "0.07649", "0.07794", "0.07901"]}
+[PriceWatcher] pending order temporarily missing on exchange pair=LITUSDT order_id=940901896 missing_count=1
+[PriceWatcher] order_update order_id=940901896 type=LIMIT side=None status=FILLED reduce_only=False close_position=False pair=LITUSDT
+[PriceWatcher] limit filled -> set_tp_sl_orders pair=LITUSDT
+{"ts_utc": "2026-07-01T14:07:22.833826+00:00", "event": "position_synced_with_exchange", "pair": "LITUSDT", "entry_price": "1.8228", "quantity": "107.8", "leverage": 50}
+{"ts_utc": "2026-07-01T14:07:23.941316+00:00", "event": "protection_set", "pair": "LITUSDT", "message_db_id": 201, "order_id": "940901888", "side": "long", "entry_price": "1.8228", "quantity": "107.8", "leverage": 50, "stop_loss": "1.7721", "final_tp": "2.2431", "tp_levels": ["1.9335", "1.9852", "2.0351", "2.1051", "2.2431"]}
+[SignalListener] Edit detected group=-1002647537685 message_id=5592
+[SignalListener] New message detected group=-1002647537685 topic=4 message_id=5596
+[SignalListener] Enqueued message_id=5596
+[Pipeline] Processing message_id=5596 group=-1002647537685
+[Context] message_id=5596 group=-1002647537685 topic=4 reply_to=5592 message='ENA hit TP3' binance_running=[] binance_open_orders=[] closed_today=['BEAMXUSDT', 'REUSDT'] history_count=10
+[2026-07-02 12:37:40 WIB] [SignalParser] message_id=5596 group=-1002647537685 images=2 history=10
+[2026-07-02 12:37:56 WIB] [SignalParser] Gemini parsed payload={'action': 'tp_partial', 'pair': 'ENAUSDT', 'direction': 'long', 'entry_zone': [0.07155, 0.07229], 'entry_price': None, 'take_profit_levels': [0.07465, 0.07649, 0.07794, 0.07901], 'stop_loss': 0.06952, 'risk_level': None, 'close_percentage': None}
+[2026-07-02 12:37:56 WIB] [SignalParser] message_db_id=203 action=tp_partial pair=ENAUSDT risk=normal
+[Pipeline] message_id=5596 action=tp_partial pair=ENAUSDT
+[SignalListener] Edit detected group=-1002647537685 message_id=5591
+[SignalListener] New message detected group=-1002647537685 topic=4 message_id=5598
+[SignalListener] Enqueued message_id=5598
+[Pipeline] Processing message_id=5598 group=-1002647537685
+[Context] message_id=5598 group=-1002647537685 topic=4 reply_to=5591 message='LIT sempet hit TP1, kena SL hunter trus terbang tinggi. Fuuhhh' binance_running=[] binance_open_orders=[] closed_today=['BEAMXUSDT', 'ENAUSDT', 'REUSDT'] history_count=10
+[2026-07-02 13:16:43 WIB] [SignalParser] message_id=5598 group=-1002647537685 images=2 history=10
+[2026-07-02 13:16:53 WIB] [SignalParser] Gemini parsed payload={'action': 'cutloss', 'pair': 'LITUSDT', 'direction': 'long', 'entry_zone': None, 'entry_price': None, 'take_profit_levels': None, 'stop_loss': None, 'risk_level': None, 'close_percentage': 100}
+[2026-07-02 13:16:53 WIB] [SignalParser] message_db_id=204 action=cutloss pair=LITUSDT risk=normal
+[Pipeline] message_id=5598 action=cutloss pair=LITUSDT
+{"ts_utc": "2026-07-02T06:16:53.887180+00:00", "event": "position_closed", "pair": "LITUSDT", "message_db_id": 204, "reason": "cutloss"}
+[SignalListener] New message detected group=-1002647537685 topic=4 message_id=5599
+[SignalListener] Enqueued message_id=5599
+[Pipeline] Processing message_id=5599 group=-1002647537685
+[Context] message_id=5599 group=-1002647537685 topic=4 reply_to=4 message='[OPEN] SYN. Long.  Entry tunggu kuning. SL pelit di merah, SL jauh di ungu.' binance_running=[] binance_open_orders=[] closed_today=['BEAMXUSDT', 'ENAUSDT', 'LITUSDT', 'REUSDT'] history_count=10
+[2026-07-02 13:30:17 WIB] [SignalParser] message_id=5599 group=-1002647537685 images=1 history=10
+[2026-07-02 13:30:30 WIB] [SignalParser] Gemini parsed payload={'action': 'new_signal', 'pair': 'SYNUSDT', 'direction': 'LONG', 'entry_zone': [0.49551, 0.52138], 'entry_price': None, 'take_profit_levels': [0.5728, 0.60973, 0.65282, 0.69437], 'stop_loss': 0.47572, 'risk_level': 'medium', 'close_percentage': None}
+[2026-07-02 13:30:30 WIB] [SignalParser] message_db_id=205 action=new_signal pair=SYNUSDT risk=normal
+[Pipeline] message_id=5599 action=new_signal pair=SYNUSDT
+[PriceWatcher] register_pending_order order_id=2133050937 pair=SYNUSDT action=new_signal pending_count=1
+[PriceWatcher] register_pending_order order_id=2133050958 pair=SYNUSDT action=new_signal pending_count=2
+{"ts_utc": "2026-07-02T06:30:32.082447+00:00", "event": "new_signal_executed", "pair": "SYNUSDT", "message_db_id": 205, "action": "new_signal", "side": "long", "order_type": "double_entry", "order_id": "2133050937", "order_id_1": "2133050937", "order_id_2": "2133050958", "requested_leverage": 50, "effective_leverage": 10, "account_balance": "187.26781481", "risk_level": "normal", "entry_raw": "0.5213800/0.4955100", "entry_final": "0.5213800/0.4955100", "qty": "17/75", "margin_used": "4.68169537025", "stop_loss": "0.4757200", "take_profit": "0.6943700", "entry_zone": ["0.49551", "0.52138"]}
+[PriceWatcher] subscribe pair=SYNUSDT active=['ENAUSDT', 'HYPEUSDT', 'LITUSDT', 'STBLUSDT', 'SYNUSDT']
+[Watcher] Subscribed pair=SYNUSDT
+[PriceWatcher] order_update order_id=2133050937 type=LIMIT side=None status=FILLED reduce_only=False close_position=False pair=SYNUSDT
+[PriceWatcher] limit filled -> set_tp_sl_orders pair=SYNUSDT
+{"ts_utc": "2026-07-02T08:32:55.080555+00:00", "event": "position_synced_with_exchange", "pair": "SYNUSDT", "entry_price": "0.52138", "quantity": "17", "leverage": 10}
+{"ts_utc": "2026-07-02T08:32:55.730966+00:00", "event": "protection_set", "pair": "SYNUSDT", "message_db_id": 205, "order_id": "2133050937", "side": "long", "entry_price": "0.52138", "quantity": "17", "leverage": 10, "stop_loss": "0.47572", "final_tp": "0.69437", "tp_levels": ["0.5728", "0.60973", "0.65282", "0.69437"]}
+[SignalListener] New message detected group=-1002647537685 topic=4 message_id=5600
+[SignalListener] Enqueued message_id=5600
+[Pipeline] Processing message_id=5600 group=-1002647537685
+[Context] message_id=5600 group=-1002647537685 topic=4 reply_to=5599 message='SYN hit TP 1' binance_running=['SYNUSDT'] binance_open_orders=['SYNUSDT'] closed_today=['BEAMXUSDT', 'ENAUSDT', 'LITUSDT', 'REUSDT'] history_count=10
+[2026-07-02 17:08:28 WIB] [SignalParser] message_id=5600 group=-1002647537685 images=2 history=10
+[2026-07-02 17:08:37 WIB] [SignalParser] Gemini parsed payload={'action': 'tp_partial', 'pair': 'SYNUSDT', 'direction': 'long', 'entry_zone': [0.49551, 0.52138], 'entry_price': None, 'take_profit_levels': [0.5728, 0.60973, 0.65282, 0.69437], 'stop_loss': 0.47572, 'risk_level': None, 'close_percentage': None}
+[2026-07-02 17:08:37 WIB] [SignalParser] message_db_id=206 action=tp_partial pair=SYNUSDT risk=normal
+[SignalListener] Edit detected group=-1002647537685 message_id=5599
+[Pipeline] message_id=5600 action=tp_partial pair=SYNUSDT
+[PriceWatcher] order_update order_id=2133050958 type=LIMIT side=None status=FILLED reduce_only=False close_position=False pair=SYNUSDT
+[PriceWatcher] limit filled -> set_tp_sl_orders pair=SYNUSDT
+{"ts_utc": "2026-07-02T15:32:52.421880+00:00", "event": "position_synced_with_exchange", "pair": "SYNUSDT", "entry_price": "0.5002903260869564", "quantity": "92", "leverage": 10}
+{"ts_utc": "2026-07-02T15:32:53.321834+00:00", "event": "protection_set", "pair": "SYNUSDT", "message_db_id": 205, "order_id": "2133050937", "side": "long", "entry_price": "0.5002903260869564", "quantity": "92", "leverage": 10, "stop_loss": "0.47572", "final_tp": "0.69437", "tp_levels": ["0.5728", "0.60973", "0.65282", "0.69437"]}
+[SignalListener] Edit detected group=-1002647537685 message_id=5579
+[SignalListener] New message detected group=-1002647537685 topic=4 message_id=5604
+[SignalListener] Enqueued message_id=5604
+[Pipeline] Processing message_id=5604 group=-1002647537685
+[Context] message_id=5604 group=-1002647537685 topic=4 reply_to=5579 message='HYPE 2 balik hit TP 1 & 2. Hold = set sl+' binance_running=['SYNUSDT'] binance_open_orders=[] closed_today=['BEAMXUSDT', 'ENAUSDT', 'LITUSDT', 'REUSDT'] history_count=10
+[2026-07-03 07:46:22 WIB] [SignalParser] message_id=5604 group=-1002647537685 images=2 history=10
+[2026-07-03 07:46:33 WIB] [SignalParser] Gemini parsed payload={'action': 'update_sl', 'pair': 'HYPEUSDT', 'direction': 'LONG', 'entry_zone': None, 'entry_price': None, 'take_profit_levels': None, 'stop_loss': None, 'risk_level': None, 'close_percentage': None}
+[2026-07-03 07:46:33 WIB] [SignalParser] message_db_id=207 action=update_sl pair=HYPEUSDT risk=normal
+[Pipeline] message_id=5604 action=update_sl pair=HYPEUSDT
+[SignalListener] New message detected group=-1002647537685 topic=4 message_id=5605
+[SignalListener] Enqueued message_id=5605
+[Pipeline] Processing message_id=5605 group=-1002647537685
+[Context] message_id=5605 group=-1002647537685 topic=4 reply_to=4 message='[OPEN] XLM. Long.  Kepala dino, expecting breakout. High risk, belum ada konfirmasi breakout.' binance_running=['SYNUSDT'] binance_open_orders=[] closed_today=['BEAMXUSDT', 'ENAUSDT', 'LITUSDT', 'REUSDT'] history_count=10
+[2026-07-03 09:27:58 WIB] [SignalParser] message_id=5605 group=-1002647537685 images=1 history=10
+[2026-07-03 09:28:04 WIB] [SignalParser] Gemini parsed payload={'action': 'new_signal', 'pair': 'XLMUSDT', 'direction': 'LONG', 'entry_zone': [0.19548, 0.19903], 'entry_price': None, 'take_profit_levels': [0.20155, 0.20361, 0.2067, 0.21002, 0.21426, 0.22033], 'stop_loss': 0.1917, 'risk_level': 'high', 'close_percentage': None}
+[2026-07-03 09:28:04 WIB] [SignalParser] message_db_id=208 action=new_signal pair=XLMUSDT risk=high
+[Pipeline] message_id=5605 action=new_signal pair=XLMUSDT
+[PriceWatcher] register_pending_order order_id=22420445160 pair=XLMUSDT action=new_signal pending_count=1
+{"ts_utc": "2026-07-03T02:28:07.323030+00:00", "event": "protection_set", "pair": "XLMUSDT", "message_db_id": 208, "order_id": "22420445148", "side": "long", "entry_price": "0.19903", "quantity": "231", "leverage": 50, "stop_loss": "0.1917", "final_tp": "0.22033", "tp_levels": ["0.20155", "0.20361", "0.2067", "0.21002", "0.21426", "0.22033"]}
+{"ts_utc": "2026-07-03T02:28:08.022612+00:00", "event": "new_signal_executed", "pair": "XLMUSDT", "message_db_id": 208, "action": "new_signal", "side": "long", "order_type": "double_entry", "order_id": "22420445148", "order_id_1": "22420445148", "order_id_2": "22420445160", "requested_leverage": 50, "effective_leverage": 50, "account_balance": "183.94010374", "risk_level": "high", "entry_raw": "0.19903/0.19548", "entry_final": "0.19903/0.19548", "qty": "231/940", "margin_used": "4.59850259350", "stop_loss": "0.1917", "take_profit": "0.22033", "entry_zone": ["0.19548", "0.19903"]}
+[PriceWatcher] subscribe pair=XLMUSDT active=['ENAUSDT', 'HYPEUSDT', 'LITUSDT', 'STBLUSDT', 'SYNUSDT', 'XLMUSDT']
+[Watcher] Subscribed pair=XLMUSDT
+[SignalListener] New message detected group=-1002647537685 topic=4 message_id=5606
+[SignalListener] Enqueued message_id=5606
+[Pipeline] Processing message_id=5606 group=-1002647537685
+[Context] message_id=5606 group=-1002647537685 topic=4 reply_to=4 message='[OPEN] ONDO. Long.  Hunting breakout.' binance_running=['SYNUSDT', 'XLMUSDT'] binance_open_orders=['XLMUSDT'] closed_today=['BEAMXUSDT', 'ENAUSDT', 'LITUSDT', 'REUSDT'] history_count=10
+[2026-07-03 10:24:01 WIB] [SignalParser] message_id=5606 group=-1002647537685 images=1 history=10
+[2026-07-03 10:24:09 WIB] [SignalParser] Gemini parsed payload={'action': 'new_signal', 'pair': 'ONDOUSDT', 'direction': 'LONG', 'entry_zone': [0.3301, 0.3323], 'entry_price': None, 'take_profit_levels': [0.3369, 0.3405, 0.3442], 'stop_loss': 0.3252, 'risk_level': None, 'close_percentage': None}
+[2026-07-03 10:24:09 WIB] [SignalParser] message_db_id=209 action=new_signal pair=ONDOUSDT risk=normal
+[Pipeline] message_id=5606 action=new_signal pair=ONDOUSDT
+[PriceWatcher] register_pending_order order_id=10148013222 pair=ONDOUSDT action=new_signal pending_count=2
+{"ts_utc": "2026-07-03T03:24:11.586574+00:00", "event": "protection_set", "pair": "ONDOUSDT", "message_db_id": 209, "order_id": "10148013218", "side": "long", "entry_price": "0.3323000", "quantity": "135.1", "leverage": 50, "stop_loss": "0.3252", "final_tp": "0.3442", "tp_levels": ["0.3369", "0.3405", "0.3442"]}
+{"ts_utc": "2026-07-03T03:24:12.501516+00:00", "event": "new_signal_executed", "pair": "ONDOUSDT", "message_db_id": 209, "action": "new_signal", "side": "long", "order_type": "double_entry", "order_id": "10148013218", "order_id_1": "10148013218", "order_id_2": "10148013222", "requested_leverage": 50, "effective_leverage": 50, "account_balance": "179.69688164", "risk_level": "normal", "entry_raw": "0.3323000/0.3301000", "entry_final": "0.3323000/0.3301000", "qty": "135.1/544.3", "margin_used": "4.49242204100", "stop_loss": "0.3252000", "take_profit": "0.3442000", "entry_zone": ["0.3301", "0.3323"]}
+[PriceWatcher] subscribe pair=ONDOUSDT active=['ENAUSDT', 'HYPEUSDT', 'LITUSDT', 'ONDOUSDT', 'STBLUSDT', 'SYNUSDT', 'XLMUSDT']
+[Watcher] Subscribed pair=ONDOUSDT
+[PriceWatcher] order_update order_id=10148013222 type=LIMIT side=None status=FILLED reduce_only=False close_position=False pair=ONDOUSDT
+[PriceWatcher] limit filled -> set_tp_sl_orders pair=ONDOUSDT
+{"ts_utc": "2026-07-03T04:09:43.713184+00:00", "event": "position_synced_with_exchange", "pair": "ONDOUSDT", "entry_price": "0.3304977038563438", "quantity": "679.4", "leverage": 50}
+{"ts_utc": "2026-07-03T04:09:44.604053+00:00", "event": "protection_set", "pair": "ONDOUSDT", "message_db_id": 209, "order_id": "10148013218", "side": "long", "entry_price": "0.3304977038563438", "quantity": "679.4", "leverage": 50, "stop_loss": "0.3252", "final_tp": "0.3442", "tp_levels": ["0.3369", "0.3405", "0.3442"]}
+[SignalListener] New message detected group=-1002647537685 topic=4 message_id=5607
+[SignalListener] Enqueued message_id=5607
+[Pipeline] Processing message_id=5607 group=-1002647537685
+[Context] message_id=5607 group=-1002647537685 topic=4 reply_to=4 message='[OPEN] LIT. Short.  Entry tunggu bouncing ke area kuning.' binance_running=['ONDOUSDT', 'SYNUSDT', 'XLMUSDT'] binance_open_orders=['XLMUSDT'] closed_today=['BEAMXUSDT', 'ENAUSDT', 'LITUSDT', 'REUSDT'] history_count=10
+[2026-07-03 14:55:09 WIB] [SignalParser] message_id=5607 group=-1002647537685 images=1 history=10
+[2026-07-03 14:55:15 WIB] [SignalParser] Gemini parsed payload={'action': 'new_signal', 'pair': 'LITUSDT', 'direction': 'SHORT', 'entry_zone': [2.0787, 2.1192], 'entry_price': None, 'take_profit_levels': [2.0115, 1.9733, 1.9409, 1.8876, 1.8402, 1.7568], 'stop_loss': 2.1621, 'risk_level': None, 'close_percentage': None}
+[2026-07-03 14:55:15 WIB] [SignalParser] message_db_id=210 action=new_signal pair=LITUSDT risk=normal
+[Pipeline] message_id=5607 action=new_signal pair=LITUSDT
+[PriceWatcher] register_pending_order order_id=988027980 pair=LITUSDT action=new_signal pending_count=2
+[PriceWatcher] register_pending_order order_id=988027982 pair=LITUSDT action=new_signal pending_count=3
+{"ts_utc": "2026-07-03T07:55:16.930303+00:00", "event": "new_signal_executed", "pair": "LITUSDT", "message_db_id": 210, "action": "new_signal", "side": "short", "order_type": "double_entry", "order_id": "988027980", "order_id_1": "988027980", "order_id_2": "988027982", "requested_leverage": 50, "effective_leverage": 50, "account_balance": "175.56878766", "risk_level": "normal", "entry_raw": "2.078700/2.119200", "entry_final": "2.078700/2.119200", "qty": "21.1/82.8", "margin_used": "4.38921969150", "stop_loss": "2.162100", "take_profit": "1.756800", "entry_zone": ["2.0787", "2.1192"]}
+[PriceWatcher] subscribe pair=LITUSDT active=['ENAUSDT', 'HYPEUSDT', 'LITUSDT', 'ONDOUSDT', 'STBLUSDT', 'SYNUSDT', 'XLMUSDT']
+[Watcher] Subscribed pair=LITUSDT
+[PriceWatcher] order_update order_id=988027980 type=LIMIT side=None status=FILLED reduce_only=False close_position=False pair=LITUSDT
+[PriceWatcher] limit filled -> set_tp_sl_orders pair=LITUSDT
+{"ts_utc": "2026-07-03T13:40:00.001957+00:00", "event": "position_synced_with_exchange", "pair": "LITUSDT", "entry_price": "2.0787", "quantity": "21.1", "leverage": 50}
+{"ts_utc": "2026-07-03T13:40:00.850362+00:00", "event": "protection_set", "pair": "LITUSDT", "message_db_id": 210, "order_id": "988027980", "side": "short", "entry_price": "2.0787", "quantity": "21.1", "leverage": 50, "stop_loss": "2.1621", "final_tp": "1.7568", "tp_levels": ["2.0115", "1.9733", "1.9409", "1.8876", "1.8402", "1.7568"]}
+[SignalListener] Edit detected group=-1002647537685 message_id=5605
+[SignalListener] New message detected group=-1002647537685 topic=4 message_id=5608
+[SignalListener] Enqueued message_id=5608
+[Pipeline] Processing message_id=5608 group=-1002647537685
+[Context] message_id=5608 group=-1002647537685 topic=4 reply_to=5605 message='XLM hit TP2. Hold = set SL+' binance_running=['LITUSDT', 'ONDOUSDT', 'XLMUSDT'] binance_open_orders=['LITUSDT', 'XLMUSDT'] closed_today=['BEAMXUSDT', 'ENAUSDT', 'LITUSDT', 'REUSDT'] history_count=10
+[2026-07-03 21:02:51 WIB] [SignalParser] message_id=5608 group=-1002647537685 images=2 history=10
+[2026-07-03 21:03:02 WIB] [SignalParser] Gemini parsed payload={'action': 'update_sl', 'pair': 'XLMUSDT', 'direction': 'long', 'entry_zone': None, 'entry_price': None, 'take_profit_levels': None, 'stop_loss': 0.19814, 'risk_level': None, 'close_percentage': None}
+[2026-07-03 21:03:02 WIB] [SignalParser] message_db_id=211 action=update_sl pair=XLMUSDT risk=normal
+[Pipeline] message_id=5608 action=update_sl pair=XLMUSDT
+{"ts_utc": "2026-07-03T14:03:02.957227+00:00", "event": "update_sl", "pair": "XLMUSDT", "message_db_id": 211, "side": "long", "new_stop_loss": "0.19814"}
+[PriceWatcher] order_update order_id=988027982 type=LIMIT side=None status=FILLED reduce_only=False close_position=False pair=LITUSDT
+[PriceWatcher] limit filled -> set_tp_sl_orders pair=LITUSDT
+{"ts_utc": "2026-07-03T14:35:41.697721+00:00", "event": "position_synced_with_exchange", "pair": "LITUSDT", "entry_price": "2.1109752646775743", "quantity": "103.9", "leverage": 50}
+{"ts_utc": "2026-07-03T14:35:42.559308+00:00", "event": "protection_set", "pair": "LITUSDT", "message_db_id": 210, "order_id": "988027980", "side": "short", "entry_price": "2.1109752646775743", "quantity": "103.9", "leverage": 50, "stop_loss": "2.1621", "final_tp": "1.7568", "tp_levels": ["2.0115", "1.9733", "1.9409", "1.8876", "1.8402", "1.7568"]}
+[SignalListener] Edit detected group=-1002647537685 message_id=5607
+[SignalListener] New message detected group=-1002647537685 topic=4 message_id=5609
+[SignalListener] Enqueued message_id=5609
+[Pipeline] Processing message_id=5609 group=-1002647537685
+[Context] message_id=5609 group=-1002647537685 topic=4 reply_to=5607 message='LIT hit SL' binance_running=['ONDOUSDT', 'XLMUSDT'] binance_open_orders=['XLMUSDT'] closed_today=['BEAMXUSDT', 'ENAUSDT', 'LITUSDT', 'REUSDT'] history_count=10
+[2026-07-04 00:05:21 WIB] [SignalParser] message_id=5609 group=-1002647537685 images=1 history=10
+[2026-07-04 00:05:29 WIB] [SignalParser] Gemini parsed payload={'action': 'cutloss', 'pair': 'LITUSDT', 'direction': 'short', 'entry_zone': None, 'entry_price': None, 'take_profit_levels': None, 'stop_loss': None, 'risk_level': None, 'close_percentage': 100}
+[2026-07-04 00:05:29 WIB] [SignalParser] message_db_id=212 action=cutloss pair=LITUSDT risk=normal
+[Pipeline] message_id=5609 action=cutloss pair=LITUSDT
+{"ts_utc": "2026-07-03T17:05:30.675731+00:00", "event": "position_closed", "pair": "LITUSDT", "message_db_id": 212, "reason": "cutloss"}
+[SignalListener] Edit detected group=-1002647537685 message_id=5606
+[SignalListener] New message detected group=-1002647537685 topic=4 message_id=5610
+[SignalListener] Enqueued message_id=5610
+[Pipeline] Processing message_id=5610 group=-1002647537685
+[Context] message_id=5610 group=-1002647537685 topic=4 reply_to=5606 message='ONDO hit TP1' binance_running=['ONDOUSDT', 'XLMUSDT'] binance_open_orders=['XLMUSDT'] closed_today=['BEAMXUSDT', 'ENAUSDT', 'LITUSDT', 'REUSDT'] history_count=10
+[2026-07-04 10:13:42 WIB] [SignalParser] message_id=5610 group=-1002647537685 images=2 history=10
+[2026-07-04 10:13:51 WIB] [SignalParser] Gemini parsed payload={'action': 'tp_partial', 'pair': 'ONDOUSDT', 'direction': 'long', 'entry_zone': [0.3301, 0.3323], 'entry_price': None, 'take_profit_levels': [0.3369, 0.3405, 0.3442], 'stop_loss': 0.3252, 'risk_level': None, 'close_percentage': None}
+[2026-07-04 10:13:51 WIB] [SignalParser] message_db_id=213 action=tp_partial pair=ONDOUSDT risk=normal
+[Pipeline] message_id=5610 action=tp_partial pair=ONDOUSDT
+[SignalListener] Edit detected group=-1002647537685 message_id=3544
+[SignalListener] Edit ignored message_id=3544 (not found in DB)
+[SignalListener] Edit detected group=-1002647537685 message_id=3544
+[SignalListener] Edit ignored message_id=3544 (not found in DB)
+Telegram is having internal issues PersistentTimestampOutdatedError: Persistent timestamp outdated (caused by GetChannelDifferenceRequest)
+Telegram is having internal issues PersistentTimestampOutdatedError: Persistent timestamp outdated (caused by GetChannelDifferenceRequest)
+Telegram is having internal issues PersistentTimestampOutdatedError: Persistent timestamp outdated (caused by GetChannelDifferenceRequest)
+[Main] Starting CaraCrypto Trader...
+[Main] Database connected
+[2026-07-05 17:54:12 WIB] [SignalParser] Ready model=gemini-3.5-flash api_key=set
+[Main] Binance env=mainnet base=https://fapi.binance.com
+[Main] Watcher wired to engine
+{"ts_utc": "2026-07-05T10:54:13.156761+00:00", "event": "startup_reconcile_positions", "removed": ["HYPEUSDT", "ONDOUSDT", "STBLUSDT", "SYNUSDT"], "recovered": [], "kept": []}
+[Main] Startup reconcile kept=[] recovered=[] removed=['HYPEUSDT', 'ONDOUSDT', 'STBLUSDT', 'SYNUSDT']
+[Main] Services initialized.
+[Main] Starting tasks: watcher, telegram listener, pipeline processor
+[PriceWatcher] Started
+[PriceWatcher] User data stream loop started
+[PriceWatcher] user stream connected url=wss://fstream.binance.com/ws/KUPPpdoeENwSjiYBxBJmjqrcEskMXnbTXhVSdyRHJDQhbVuFQAc3p9rZKSpXfwUA
+[SignalListener] Telegram connected
+[SignalListener] Monitoring groups: [-1002647537685, -1003629502181]
+[SignalListener] New message detected group=-1002647537685 topic=4 message_id=5612
+[SignalListener] Enqueued message_id=5612
+[Pipeline] Processing message_id=5612 group=-1002647537685
+[Context] message_id=5612 group=-1002647537685 topic=4 reply_to=5580 message='RE hunting breakout trendline ungu. Spekulasi masuk now, target hijau. SL tetep di merah' binance_running=[] binance_open_orders=[] closed_today=['HYPEUSDT', 'ONDOUSDT', 'STBLUSDT', 'SYNUSDT'] history_count=10
+[2026-07-06 07:35:02 WIB] [SignalParser] message_id=5612 group=-1002647537685 images=2 history=10
+[2026-07-06 07:35:15 WIB] [SignalParser] Gemini parsed payload={'action': 'new_signal', 'pair': 'REUSDT', 'direction': 'LONG', 'entry_zone': [0.5888, 0.632], 'entry_price': 0.6598, 'take_profit_levels': [0.6961, 0.7704, 0.8747, 0.9641], 'stop_loss': 0.5642, 'risk_level': 'high', 'close_percentage': None}
+[2026-07-06 07:35:15 WIB] [SignalParser] Text guard adjusted payload={'action': 'update_sl', 'pair': 'REUSDT', 'direction': 'LONG', 'entry_zone': [0.5888, 0.632], 'entry_price': 0.6598, 'take_profit_levels': [0.6961, 0.7704, 0.8747, 0.9641], 'stop_loss': 0.5642, 'risk_level': 'high', 'close_percentage': None, 'order_type': 'market'}
+[2026-07-06 07:35:15 WIB] [SignalParser] message_db_id=215 action=update_sl pair=REUSDT risk=high
+[Pipeline] message_id=5612 action=update_sl pair=REUSDT
+[SignalListener] New message detected group=-1002647537685 topic=4 message_id=5617
+[SignalListener] Enqueued message_id=5617
+[Pipeline] Processing message_id=5617 group=-1002647537685
+[Context] message_id=5617 group=-1002647537685 topic=4 reply_to=4 message='~market sideways, lagi nunggu BTC mau dikemanain di awal minggu sesi US' binance_running=[] binance_open_orders=[] closed_today=['HYPEUSDT', 'ONDOUSDT', 'STBLUSDT', 'SYNUSDT'] history_count=10
+[2026-07-06 16:45:51 WIB] [SignalParser] message_id=5617 group=-1002647537685 images=0 history=10
+[2026-07-06 16:45:55 WIB] [SignalParser] Gemini parsed payload={'action': 'skip', 'pair': None, 'direction': None, 'entry_zone': None, 'entry_price': None, 'take_profit_levels': None, 'stop_loss': None, 'risk_level': None, 'close_percentage': None}
+[2026-07-06 16:45:55 WIB] [SignalParser] message_db_id=216 action=skip pair=None risk=normal
+[Pipeline] message_id=5617 action=skip
+[SignalListener] Edit detected group=-1002647537685 message_id=10
+[SignalListener] Edit ignored message_id=10 (not found in DB)
+[SignalListener] Edit detected group=-1002647537685 message_id=10
+[SignalListener] Edit ignored message_id=10 (not found in DB)
