@@ -243,6 +243,7 @@ async def test_python_binance_margin_and_leverage_adapter_property():
     await e._set_margin_mode_cross("BTCUSDT")
     leverage = await e._set_leverage("BTCUSDT", 125)
     assert client.margin_calls[0]["symbol"] == "BTCUSDT"
+    assert client.margin_calls[0]["marginType"] == "CROSSED"
     assert client.leverage_calls[0]["leverage"] == 125
     assert leverage == 125
 

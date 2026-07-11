@@ -17,7 +17,7 @@ from typing import Dict, List
 
 LEVERAGE_MAP: Dict[str, int] = {"BTCUSDT": 20, "ETHUSDT": 20}
 DEFAULT_LEVERAGE: int = 20
-MARGIN_MODE: str = "CROSS"
+MARGIN_MODE: str = "CROSSED"
 
 # Endpoint host Binance Futures USDT-M per environment.
 # - mainnet  : production (perlu key live + Futures permission + IP whitelist).
