@@ -346,14 +346,25 @@ class TradeEngine:
         return None
 
     async def _set_margin_mode_cross(self, pair: str) -> None:
-        try:
-            if hasattr(self.client, "change_margin_type"):
-                self.client.change_margin_type(symbol=pair, marginType=MARGIN_MODE)
-            elif hasattr(self.client, "futures_change_margin_type"):
-                self.client.futures_change_margin_type(symbol=pair, marginType=MARGIN_MODE)
-        except Exception:
-            # Biasanya error kalau already CROSS; aman diabaikan.
-            pass
+        last_err = None
+        for attempt in range(3):
+            try:
+                if hasattr(self.client, "change_margin_type"):
+                    self.client.change_margin_type(symbol=pair, marginType=MARGIN_MODE)
+                elif hasattr(self.client, "futures_change_margin_type"):
+                    self.client.futures_change_margin_type(symbol=pair, marginType=MARGIN_MODE)
+                return  # Success
+            except Exception as e:
+                last_err = e
+                err_msg = str(e)
+                if "No need to change" in err_msg or "-4046" in err_msg:
+                    return  # Already CROSS
+                if attempt < 2:
+                    await asyncio.sleep(1.0)
+        
+        if last_err is not None:
+            self._write_audit_log("change_margin_mode_failed", pair=pair, error=str(last_err))
+            await self._safe_alert("notify_error", "change_margin_mode_failed", f"pair={pair} error={str(last_err)}")
 
     async def _set_leverage(self, pair: str, leverage: int) -> int:
         requested = max(1, int(leverage))
@@ -896,8 +907,8 @@ class TradeEngine:
                 entry_1_price = zone_low
                 entry_2_price = zone_high
 
-            budget_1 = account_balance * Decimal("0.005")  # 0.5%
-            budget_2 = account_balance * Decimal("0.02")   # 2.0%
+            budget_1 = account_balance * Decimal("0.01")  # 1.0%
+            budget_2 = account_balance * Decimal("0.04")  # 4.0%
 
             qty_1_raw = (budget_1 * Decimal(leverage)) / entry_1_price
             qty_2_raw = (budget_2 * Decimal(leverage)) / entry_2_price
@@ -1069,7 +1080,7 @@ class TradeEngine:
                 )
                 return False
 
-            budget = account_balance * Decimal("0.025")  # 2.5%
+            budget = account_balance * Decimal("0.05")  # 5.0%
             qty_raw = (budget * Decimal(leverage)) / entry_price_final
 
             qty, normalized_entry = self._normalize_order_inputs(action.pair, qty_raw, entry_price_final)
@@ -1820,7 +1831,7 @@ class TradeEngine:
 
         ordered_tp = self._ordered_tp_levels(pos)
         if is_entry2_flow and reached_idx == 0:
-            close_percentage = 50.0
+            close_percentage = 70.0
             new_sl = self._compute_sl_plus_from_entry(pos.direction, pos.entry_price)
         else:
             close_percentage = 70.0

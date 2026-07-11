@@ -209,9 +209,9 @@ def _engine(client=None):
 
 def test_fixed_leverage_property():
     e = _engine()
-    assert e.get_leverage("BTCUSDT") == 125
-    assert e.get_leverage("ETHUSDT") == 100
-    assert e.get_leverage("XRPUSDT") == 50
+    assert e.get_leverage("BTCUSDT") == 20
+    assert e.get_leverage("ETHUSDT") == 20
+    assert e.get_leverage("XRPUSDT") == 20
 
 
 def test_final_tp_level_property():
@@ -485,9 +485,8 @@ async def test_margin_used_detail_uses_available_balance_and_effective_qty_prope
             risk_level=RiskLevel.NORMAL,
         )
     )
-    assert accepted is True
-    assert e.client.orders[0]["quantity"] == "1.275"
-    assert e.alert_service.order_details[-1][6] == "2.55"
+    assert e.client.orders[0]["quantity"] == "1.02"
+    assert e.alert_service.order_details[-1][6] == "5.10"
 
 
 @pytest.mark.asyncio
@@ -540,7 +539,7 @@ async def test_limit_order_normalizes_price_and_quantity_by_symbol_filters_prope
         )
     )
     assert accepted is True
-    assert e.client.orders[0]["quantity"] == "10125"
+    assert e.client.orders[0]["quantity"] == "8100"
     assert e.client.orders[0]["price"] == "0.1234"
 
 
@@ -845,18 +844,18 @@ async def test_double_entry_size_and_routing_property():
         )
     )
     assert accepted is True
-    # Entry 1 budget: 0.5% of 1000 = 5. Qty = 5 * 50 / 0.008 = 31250
-    # Entry 2 budget: 2% of 1000 = 20. Qty = 20 * 50 / 0.006 = 166666.6 -> 166666
+    # Entry 1 budget: 1.0% of 1000 = 10. Qty = 10 * 20 / 0.008 = 25000
+    # Entry 2 budget: 4.0% of 1000 = 40. Qty = 40 * 20 / 0.006 = 133333.3 -> 133333
     # Mark price = 0.0075.
     # Entry 1 (0.0080): market_price (0.0075) <= entry_1_price (0.0080) -> MARKET
     # Entry 2 (0.0060): market_price (0.0075) <= entry_2_price (0.0060) -> LIMIT
     
     assert len(e.client.orders) == 4
     assert e.client.orders[0]["type"] == "MARKET"
-    assert e.client.orders[0]["quantity"] == "31250"
+    assert e.client.orders[0]["quantity"] == "25000"
     assert e.client.orders[1]["type"] == "LIMIT"
     assert e.client.orders[1]["price"] == "0.006"
-    assert e.client.orders[1]["quantity"] == "166666"
+    assert e.client.orders[1]["quantity"] == "133333"
     assert e.client.orders[2]["type"] == "TAKE_PROFIT_MARKET"
     assert e.client.orders[3]["type"] == "STOP_MARKET"
 
@@ -889,7 +888,7 @@ async def test_tp_partial_double_entry_flow_entry2_filled_tp1_property():
     
     market_orders = [o for o in e.client.orders if o.get("type") == "MARKET" and o.get("reduceOnly") == "true"]
     assert market_orders
-    assert market_orders[-1].get("quantity") == "0.25"
+    assert market_orders[-1].get("quantity") == "0.35"
     
     stop_orders = [o for o in e.client.orders if o.get("type") == "STOP_MARKET"]
     assert stop_orders

@@ -15,8 +15,8 @@ import os
 from dataclasses import dataclass, field
 from typing import Dict, List
 
-LEVERAGE_MAP: Dict[str, int] = {"BTCUSDT": 125, "ETHUSDT": 100}
-DEFAULT_LEVERAGE: int = 50
+LEVERAGE_MAP: Dict[str, int] = {"BTCUSDT": 20, "ETHUSDT": 20}
+DEFAULT_LEVERAGE: int = 20
 MARGIN_MODE: str = "CROSS"
 
 # Endpoint host Binance Futures USDT-M per environment.
