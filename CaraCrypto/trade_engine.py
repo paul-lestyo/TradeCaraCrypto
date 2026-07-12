@@ -256,18 +256,24 @@ class TradeEngine:
     def _resolve_reached_tp_index(self, pos: RunningPosition, current_price: Decimal) -> int:
         ordered = self._ordered_tp_levels(pos)
         reached_idx = -1
+        tolerance_pct = Decimal(str(getattr(self.risk_config, "tp_tolerance_percent", 2.0))) / Decimal("100")
         for idx, level in enumerate(ordered):
+            # Toleransi hanya berlaku untuk TP2 (idx == 1)
+            tolerance = tolerance_pct if idx == 1 else Decimal("0")
             if pos.direction == Direction.LONG:
-                if current_price >= level:
+                threshold = level * (Decimal("1") - tolerance)
+                if current_price >= threshold:
                     reached_idx = idx
                 else:
                     break
             else:
-                if current_price <= level:
+                threshold = level * (Decimal("1") + tolerance)
+                if current_price <= threshold:
                     reached_idx = idx
                 else:
                     break
         return reached_idx
+
 
     async def _place_partial_close_market_order(
         self, pos: RunningPosition, close_percentage: float
@@ -727,6 +733,7 @@ class TradeEngine:
         risk_level: RiskLevel,
         leverage: int,
         account_balance: Optional[Decimal] = None,
+        direction: Optional[Direction] = None,
     ) -> bool:
         if account_balance is None:
             account_balance = await self._get_account_balance()
@@ -751,13 +758,43 @@ class TradeEngine:
             return False
 
         if pair and pair in running_pairs:
-            await self._safe_alert("notify_risk_limit", f"pair already running: {pair}")
-            return False
+            opposing_running = False
+            running_payloads = self._get_binance_running_position_payloads()
+            if running_payloads is not None and pair in running_payloads:
+                pos_data = running_payloads[pair]
+                amt = self._position_amount(pos_data)
+                if amt is not None and amt.copy_abs() > 0:
+                    pos_dir = None
+                    pos_side = pos_data.get("positionSide")
+                    if pos_side == "LONG":
+                        pos_dir = Direction.LONG
+                    elif pos_side == "SHORT":
+                        pos_dir = Direction.SHORT
+                    else:
+                        if amt > 0:
+                            pos_dir = Direction.LONG
+                        elif amt < 0:
+                            pos_dir = Direction.SHORT
+                    
+                    if pos_dir is not None and direction is not None and pos_dir != direction:
+                        opposing_running = True
+            else:
+                active_pos = self.position_manager.get_position(pair)
+                if active_pos and direction is not None and active_pos.direction != direction:
+                    opposing_running = True
+            
+            if not opposing_running:
+                await self._safe_alert("notify_risk_limit", f"pair already running: {pair}")
+                return False
+
         if len(running_pairs) >= self.risk_config.max_concurrent_positions:
-            await self._safe_alert("notify_risk_limit", "max concurrent positions reached")
-            self._queued_actions.append({"pair": pair, "queued_at": datetime.now(timezone.utc).isoformat()})
-            return False
+            if pair not in running_pairs:
+                await self._safe_alert("notify_risk_limit", "max concurrent positions reached")
+                self._queued_actions.append({"pair": pair, "queued_at": datetime.now(timezone.utc).isoformat()})
+                return False
         return True
+
+
 
     async def _place_market_order(self, action: TradeAction, qty: Decimal) -> str:
         side = "BUY" if action.direction == Direction.LONG else "SELL"
@@ -838,12 +875,19 @@ class TradeEngine:
         # Batalkan semua order menggantung di Binance untuk pair ini saat sinyal baru masuk
         try:
             open_orders = self._get_open_orders(action.pair)
+            active_pos = self.position_manager.get_position(action.pair)
+            has_opposing = active_pos is not None and active_pos.direction != action.direction
             for order in open_orders:
+                if has_opposing:
+                    o_type = order.get("type") or order.get("origType")
+                    if order.get("reduceOnly") == "true" or o_type in {"STOP_MARKET", "TAKE_PROFIT_MARKET", "STOP", "TAKE_PROFIT"}:
+                        continue
                 oid = order.get("orderId")
                 if oid is not None:
                     self._cancel_order(action.pair, oid)
         except Exception as e:
             self._write_audit_log("cancel_old_orders_failed", pair=action.pair, error=str(e))
+
 
         # Bersihkan pending state di watcher & position manager agar tidak salah lacak
         if self.price_watcher:
@@ -875,7 +919,7 @@ class TradeEngine:
             temp_entry_price = Decimal("1")
 
         if not await self._check_risk_limits(
-            action.pair, temp_entry_price, action.risk_level, requested_leverage, account_balance
+            action.pair, temp_entry_price, action.risk_level, requested_leverage, account_balance, direction=action.direction
         ):
             self._write_audit_log(
                 "new_signal_rejected",
@@ -887,6 +931,43 @@ class TradeEngine:
                 account_balance=account_balance,
             )
             return False
+
+        # Safety Guard: Geser TP posisi aktif berlawanan agar tidak tabrakan di One-Way Mode
+        try:
+            active_opp = self.position_manager.get_position(action.pair)
+            if active_opp and active_opp.direction != action.direction:
+                opposing_entry = action.entry_price
+                if opposing_entry is None and action.entry_zone and len(action.entry_zone) >= 2:
+                    opposing_entry = min(action.entry_zone) if action.direction == Direction.SHORT else max(action.entry_zone)
+                if opposing_entry is None:
+                    opposing_entry = await self._get_market_reference_price(action.pair)
+                
+                if opposing_entry is not None:
+                    new_tp_levels = []
+                    modified = False
+                    for tp in active_opp.tp_levels:
+                        if active_opp.direction == Direction.LONG:
+                            if tp > opposing_entry:
+                                new_tp_levels.append(opposing_entry)
+                                modified = True
+                            else:
+                                new_tp_levels.append(tp)
+                        else:
+                            if tp < opposing_entry:
+                                new_tp_levels.append(opposing_entry)
+                                modified = True
+                            else:
+                                new_tp_levels.append(tp)
+                    if modified:
+                        await self.position_manager.update_tp(active_opp.pair, new_tp_levels)
+                        await self._update_tp_order_quantity(active_opp.pair)
+                        await self._safe_alert(
+                            "send_alert",
+                            f"Safety Guard: TP {active_opp.pair} berlawanan digeser ke {opposing_entry} untuk menghindari overlap."
+                        )
+        except Exception as e:
+            self._write_audit_log("safety_guard_adjust_tp_failed", pair=action.pair, error=str(e))
+
 
         await self._set_margin_mode_cross(action.pair)
         leverage = await self._set_leverage(action.pair, requested_leverage)

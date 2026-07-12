@@ -42,6 +42,8 @@ class PositionManager:
         return list(positions or [])
 
     async def add_pending_position(self, position: RunningPosition) -> None:
+        if position.pair in self._running_positions:
+            position.pair = f"{position.pair}_{position.direction.value.upper()}"
         self._pending_positions[position.pair] = position
         store_position = getattr(self.db, "store_position", None)
         if callable(store_position):
@@ -62,10 +64,18 @@ class PositionManager:
         remove_position = getattr(self.db, "remove_position", None)
         if callable(remove_position):
             await remove_position(pair)
-        self._closed_today.add(pair)
+        clean_pair = pair.split("_")[0]
+        self._closed_today.add(clean_pair)
 
     async def remove_pending_position(self, pair: str) -> None:
         removed = self._pending_positions.pop(pair, None)
+        if removed is None:
+            # Try to pop with suffix
+            for k in list(self._pending_positions.keys()):
+                if k.split("_")[0] == pair:
+                    removed = self._pending_positions.pop(k, None)
+                    pair = k
+                    break
         if removed is None:
             return
         remove_position = getattr(self.db, "remove_position", None)
@@ -73,23 +83,35 @@ class PositionManager:
             await remove_position(pair)
 
     def get_pending_position(self, pair: str) -> Optional[RunningPosition]:
-        return self._pending_positions.get(pair)
+        if pair in self._pending_positions:
+            return self._pending_positions[pair]
+        for k, pos in self._pending_positions.items():
+            if k.split("_")[0] == pair:
+                return pos
+        return None
 
     def has_pending_position(self, pair: str) -> bool:
-        return pair in self._pending_positions
+        if pair in self._pending_positions:
+            return True
+        for k in self._pending_positions.keys():
+            if k.split("_")[0] == pair:
+                return True
+        return False
 
     async def promote_pending_position(self, pair: str) -> Optional[RunningPosition]:
         pos = self._pending_positions.pop(pair, None)
         if not pos:
             return None
-        self._running_positions[pair] = pos
-        update_status = getattr(self.db, "update_position_status", None)
-        if callable(update_status):
-            await update_status(pair, "running")
-        else:
-            store_position = getattr(self.db, "store_position", None)
-            if callable(store_position):
-                await store_position(pos, status="running")
+        remove_position = getattr(self.db, "remove_position", None)
+        if callable(remove_position):
+            await remove_position(pair)
+        
+        clean_pair = pair.split("_")[0]
+        pos.pair = clean_pair
+        self._running_positions[clean_pair] = pos
+        store_position = getattr(self.db, "store_position", None)
+        if callable(store_position):
+            await store_position(pos, status="running")
         return pos
 
     async def promote_pending_by_order_id(self, order_id: str) -> Optional[RunningPosition]:

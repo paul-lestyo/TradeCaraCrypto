@@ -362,6 +362,14 @@ class PriceWatcher:
             action = self._pending_limit_orders.pop(order_id)
             self._pending_order_missing_count.pop(order_id, None)
             pair_for_pos = action.pair or pair
+            
+            # Suffix handling
+            has_pending = getattr(self.position_manager, "has_pending_position", None)
+            if action.direction:
+                suffixed_pair = f"{pair_for_pos}_{action.direction.value.upper()}"
+                if callable(has_pending) and has_pending(suffixed_pair):
+                    pair_for_pos = suffixed_pair
+
             promote_pending = getattr(self.position_manager, "promote_pending_position", None)
             pos = await promote_pending(pair_for_pos) if callable(promote_pending) else None
             if not pos:
@@ -397,19 +405,31 @@ class PriceWatcher:
                 )
             limit_fill_handled = True
         if order_id in self._pending_limit_orders and order_type == "LIMIT" and status in {"CANCELED", "EXPIRED", "REJECTED"}:
-            self._pending_limit_orders.pop(order_id, None)
+            action = self._pending_limit_orders.pop(order_id, None)
             self._pending_order_missing_count.pop(order_id, None)
+            target_pair = pair
+            if action and action.direction:
+                target_pair = f"{pair}_{action.direction.value.upper()}"
             has_pending = getattr(self.position_manager, "has_pending_position", None)
-            pending_exists = bool(callable(has_pending) and has_pending(pair))
-            if self.position_manager.get_position(pair) or pending_exists:
-                await self.position_manager.remove_position(pair)
-            await self.unsubscribe(pair)
+            if callable(has_pending) and has_pending(target_pair):
+                await self.position_manager.remove_pending_position(target_pair)
+            
+            has_pos = getattr(self.position_manager, "has_position", None)
+            if not callable(has_pos) or not has_pos(pair):
+                await self.unsubscribe(pair)
             await self._safe_alert("notify_closed", pair, "cancel")
         if order_type == "LIMIT" and status == "FILLED" and not limit_fill_handled:
             pos = self.position_manager.get_position(pair)
             if not pos:
                 promote_pending = getattr(self.position_manager, "promote_pending_position", None)
-                promoted = await promote_pending(pair) if callable(promote_pending) else None
+                pair_to_promote = pair
+                has_pending = getattr(self.position_manager, "has_pending_position", None)
+                if callable(has_pending):
+                    for suffix in ["_SHORT", "_LONG"]:
+                        if has_pending(f"{pair}{suffix}"):
+                            pair_to_promote = f"{pair}{suffix}"
+                            break
+                promoted = await promote_pending(pair_to_promote) if callable(promote_pending) else None
                 pos = promoted if promoted else self.position_manager.get_position(pair)
             if pos and self.trade_engine:
                 if hasattr(self.trade_engine, "_sync_position_with_exchange"):
@@ -443,7 +463,6 @@ class PriceWatcher:
             reason=close_type,
             source="socket",
         )
-        await self.unsubscribe(pair)
         if self.trade_engine and hasattr(self.trade_engine, "_cleanup_protection_orders"):
             try:
                 await self.trade_engine._cleanup_protection_orders(pair)
@@ -451,7 +470,20 @@ class PriceWatcher:
             except Exception:
                 pass
         await self.position_manager.remove_position(pair)
+        
+        has_pos_fn = getattr(self.position_manager, "has_position", None)
+        has_pending_fn = getattr(self.position_manager, "has_pending_position", None)
+        has_any = False
+        if callable(has_pos_fn) and has_pos_fn(pair):
+            has_any = True
+        if callable(has_pending_fn) and has_pending_fn(pair):
+            has_any = True
+        if not has_any:
+            await self.unsubscribe(pair)
+            
         await self._safe_alert("notify_closed", pair, close_type)
+
+
 
     def _write_trades_json(self, event: str, **kwargs) -> None:
         import json

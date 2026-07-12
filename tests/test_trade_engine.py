@@ -158,6 +158,8 @@ class _PM:
         self.m[p.pair] = p
 
     async def add_pending_position(self, p):
+        if p.pair in self.m:
+            p.pair = f"{p.pair}_{p.direction.value.upper()}"
         self.pending[p.pair] = p
 
     async def remove_position(self, pair):
@@ -166,6 +168,8 @@ class _PM:
 
     async def remove_pending_position(self, pair):
         self.pending.pop(pair, None)
+        for suffix in ["_SHORT", "_LONG"]:
+            self.pending.pop(f"{pair}{suffix}", None)
 
     async def update_sl(self, pair, sl):
         if pair in self.m:
@@ -182,15 +186,26 @@ class _PM:
         return self.m.get(pair)
 
     def get_pending_position(self, pair):
-        return self.pending.get(pair)
+        if pair in self.pending:
+            return self.pending[pair]
+        for suffix in ["_SHORT", "_LONG"]:
+            if f"{pair}{suffix}" in self.pending:
+                return self.pending[f"{pair}{suffix}"]
+        return None
 
     def has_pending_position(self, pair):
-        return pair in self.pending
+        if pair in self.pending:
+            return True
+        for suffix in ["_SHORT", "_LONG"]:
+            if f"{pair}{suffix}" in self.pending:
+                return True
+        return False
 
     async def promote_pending_position(self, pair):
         pos = self.pending.pop(pair, None)
         if pos:
-            self.m[pair] = pos
+            pos.pair = pair.split("_")[0]
+            self.m[pos.pair] = pos
         return pos
 
     def get_running_pairs(self):
@@ -209,8 +224,8 @@ def _engine(client=None):
 
 def test_fixed_leverage_property():
     e = _engine()
-    assert e.get_leverage("BTCUSDT") == 20
-    assert e.get_leverage("ETHUSDT") == 20
+    assert e.get_leverage("BTCUSDT") == 75
+    assert e.get_leverage("ETHUSDT") == 50
     assert e.get_leverage("XRPUSDT") == 20
 
 
@@ -963,3 +978,61 @@ async def test_tp_partial_double_entry_flow_entry2_not_filled_tp1_property():
     market_orders = [o for o in e.client.orders if o.get("type") == "MARKET" and o.get("reduceOnly") == "true"]
     assert not market_orders
     assert pos.last_tp_partial_index_applied == -1
+
+
+@pytest.mark.asyncio
+async def test_tp2_tolerance_resolution_property():
+    e = _engine()
+    e.risk_config.tp_tolerance_percent = 2.0
+    pos = RunningPosition(
+        "BTCUSDT", Direction.LONG, Decimal("100"), Decimal("85"), [Decimal("110"), Decimal("120")], 50, "1", Decimal("0.1"), datetime.utcnow()
+    )
+    # TP1 (index 0) has 0% tolerance
+    assert e._resolve_reached_tp_index(pos, Decimal("108")) == -1
+    assert e._resolve_reached_tp_index(pos, Decimal("110")) == 0
+
+    # TP2 (index 1) has 2% tolerance (threshold: 120 * 0.98 = 117.6)
+    assert e._resolve_reached_tp_index(pos, Decimal("117")) == 0
+    assert e._resolve_reached_tp_index(pos, Decimal("118")) == 1
+    assert e._resolve_reached_tp_index(pos, Decimal("120")) == 1
+
+
+@pytest.mark.asyncio
+async def test_opposite_direction_risk_exempt_and_tp_adjust_property():
+    e = _engine()
+    active_pos = RunningPosition(
+        "TUSDT", Direction.LONG, Decimal("100"), Decimal("85"), [Decimal("110"), Decimal("120")], 50, "1", Decimal("0.1"), datetime.utcnow()
+    )
+    await e.position_manager.add_position(active_pos)
+    e.client.positions = [{"symbol": "TUSDT", "positionAmt": "0.1", "entryPrice": "100"}]
+
+    e.client.balance = lambda **_: [{"asset": "USDT", "availableBalance": "1000"}]
+    allowed = await e._check_risk_limits(
+        "TUSDT", Decimal("100"), RiskLevel.NORMAL, 20, account_balance=Decimal("1000"), direction=Direction.SHORT
+    )
+    assert allowed is True
+
+    action = TradeAction(
+        action=GeminiAction.NEW_SIGNAL,
+        pair="TUSDT",
+        direction=Direction.SHORT,
+        order_type=OrderType.LIMIT,
+        entry_price=Decimal("105"),
+        stop_loss=Decimal("115"),
+        take_profit_levels=[Decimal("95")],
+        risk_level=RiskLevel.NORMAL
+    )
+
+    tp_updated = []
+    async def mock_update_tp(pair, tp_levels):
+        active_pos.tp_levels = tp_levels
+        tp_updated.append((pair, tp_levels))
+    e.position_manager.update_tp = mock_update_tp
+
+    accepted = await e._handle_new_signal(action, message_db_id=99)
+    assert accepted is True
+    assert "TUSDT_SHORT" in e.position_manager.pending
+    assert active_pos.tp_levels == [Decimal("105"), Decimal("105")]
+    assert ("TUSDT", [Decimal("105"), Decimal("105")]) in tp_updated
+
+

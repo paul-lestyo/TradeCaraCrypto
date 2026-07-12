@@ -15,7 +15,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Dict, List
 
-LEVERAGE_MAP: Dict[str, int] = {"BTCUSDT": 20, "ETHUSDT": 20}
+LEVERAGE_MAP: Dict[str, int] = {"BTCUSDT": 75, "ETHUSDT": 50}
 DEFAULT_LEVERAGE: int = 20
 MARGIN_MODE: str = "CROSSED"
 
@@ -75,12 +75,27 @@ class AlertConfig:
     phone: str = "120363426398056602@g.us"
 
 
+
+
+@dataclass
+class DatabaseConfig:
+    url: str
+
+
+@dataclass
+class AlertConfig:
+    base_url: str = "https://wuzapi.paulus-lestyo.my.id"
+    token: str = "abc"
+    phone: str = "120363426398056602@g.us"
+
+
 @dataclass
 class RiskConfig:
     max_concurrent_positions: int = 5
     daily_loss_limit_percent: float = 5.0
     high_risk_multiplier: float = 0.5
     trade_margin_percent: float = 1.0
+    tp_tolerance_percent: float = 2.0
 
 
 @dataclass
@@ -133,5 +148,6 @@ def load_config() -> AppConfig:
             daily_loss_limit_percent=float(os.getenv("DAILY_LOSS_LIMIT_PERCENT", "5")),
             high_risk_multiplier=float(os.getenv("HIGH_RISK_MULTIPLIER", "0.5")),
             trade_margin_percent=float(os.getenv("TRADE_MARGIN_PERCENT", "1")),
+            tp_tolerance_percent=float(os.getenv("TP_TOLERANCE_PERCENT", "2.0")),
         ),
     )
