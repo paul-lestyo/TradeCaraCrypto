@@ -78,11 +78,32 @@ async def _subscribe_watcher(watcher, pair, action):
 async def _restore_watcher_subscriptions(watcher, position_manager) -> None:
     for pos in position_manager.get_running_positions():
         await _subscribe_watcher(watcher, pos.pair, None)
+        # Also check and register any open limit orders on Binance for this pair (e.g. second entry)
+        if watcher.trade_engine:
+            try:
+                open_orders = watcher.trade_engine._get_open_orders(pos.pair)
+                for order in open_orders:
+                    o_type = order.get("type") or order.get("origType")
+                    if o_type == "LIMIT":
+                        oid = order.get("orderId")
+                        if oid is not None:
+                            action = TradeAction(action=GeminiAction.NEW_SIGNAL, pair=pos.pair)
+                            created_at = None
+                            order_time_ms = order.get("time")
+                            if order_time_ms:
+                                try:
+                                    from datetime import datetime, timezone
+                                    created_at = datetime.fromtimestamp(order_time_ms / 1000.0, tz=timezone.utc)
+                                except Exception:
+                                    pass
+                            watcher.register_pending_order(str(oid), action, created_at)
+            except Exception as exc:
+                print(f"[Main] Failed to restore open limit orders for {pos.pair}: {exc}")
     get_pending_positions = getattr(position_manager, "get_pending_positions", None)
     pending_positions = get_pending_positions() if callable(get_pending_positions) else []
     for pos in pending_positions:
         action = TradeAction(action=GeminiAction.NEW_SIGNAL, pair=pos.pair)
-        watcher.register_pending_order(str(pos.order_id), action)
+        watcher.register_pending_order(str(pos.order_id), action, pos.opened_at)
         await _subscribe_watcher(watcher, pos.pair, action)
 
 

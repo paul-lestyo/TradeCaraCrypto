@@ -240,3 +240,52 @@ def test_single_now_word_forces_market_order_override_property():
     action = p._validate_and_build_action(guarded)
     assert action is not None
     assert action.order_type == OrderType.MARKET
+
+
+def test_hold_set_sl_plus_forces_tp_partial_70_percent_override_property():
+    p = _parser()
+    context = MessageContext(
+        current_message=RawSignalMessage(
+            text="BTC Hold = set SL+",
+            group_id=-1,
+            message_id=6003,
+            reply_text="old plan",
+        ),
+        history=[],
+        position_state=PositionState(closed_today=[]),
+    )
+    payload = {
+        "action": "update_sl",
+        "pair": "BTCUSDT",
+        "stop_loss": 64000.0,
+    }
+    guarded = p._apply_current_text_guard(context, payload)
+    action = p._validate_and_build_action(guarded)
+    assert action is not None
+    assert action.action == GeminiAction.TP_PARTIAL
+    assert action.close_percentage == 70.0
+    assert action.raw_response.get("is_force_tp_partial") is True
+
+
+def test_hold_set_sl_plus_no_spaces_forces_tp_partial_70_percent_override_property():
+    p = _parser()
+    context = MessageContext(
+        current_message=RawSignalMessage(
+            text="eth hold=set sl+",
+            group_id=-1,
+            message_id=6004,
+            reply_text="old plan",
+        ),
+        history=[],
+        position_state=PositionState(closed_today=[]),
+    )
+    payload = {
+        "action": "update_sl",
+        "pair": "ETHUSDT",
+    }
+    guarded = p._apply_current_text_guard(context, payload)
+    action = p._validate_and_build_action(guarded)
+    assert action is not None
+    assert action.action == GeminiAction.TP_PARTIAL
+    assert action.close_percentage == 70.0
+    assert action.raw_response.get("is_force_tp_partial") is True

@@ -112,6 +112,8 @@ class SignalParser:
         raw = text or ""
         t = raw.upper()
         lowered = raw.lower()
+        if re.search(r"hold\s*=\s*set\s*sl\+", lowered):
+            return "tp_partial"
         if "[CANCEL]" in t or re.search(r"\b(cancel(?:ed|led)?|batal(?:kan)?|dibatal(?:kan)?|kami\s+cancel)\b", lowered):
             return "cancel"
         if "[OPEN]" in t or "[CLOSED]" in t:
@@ -211,6 +213,21 @@ class SignalParser:
         return False
 
     def _apply_current_text_guard(self, context: MessageContext, payload: Dict[str, Any]) -> Dict[str, Any]:
+        text_lower = (context.current_message.text or "").lower()
+        if re.search(r"hold\s*=\s*set\s*sl\+", text_lower):
+            guarded = dict(payload)
+            guarded["action"] = "tp_partial"
+            guarded["close_percentage"] = 70.0
+            guarded["is_force_tp_partial"] = True
+            pair = guarded.get("pair")
+            if not pair:
+                pair = self._extract_pair_from_text(context.current_message.text)
+            if not pair:
+                pair = self._extract_pair_from_text(context.current_message.reply_text)
+            if pair:
+                guarded["pair"] = pair
+            return guarded
+
         action_hint = self._infer_action_hint(context.current_message.text)
         guarded_actions = {"cancel", "update_sl", "set_sl_breakeven", "cutloss"}
         if action_hint not in guarded_actions and not self._has_now_market_override(context.current_message.text):

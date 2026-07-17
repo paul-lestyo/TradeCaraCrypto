@@ -1615,13 +1615,45 @@ class TradeEngine:
         log_message_id = message_db_id if message_db_id is not None else pos.message_db_id
         if pos.tp_levels or pos.current_sl is not None:
             await self._cleanup_protection_orders(pos.pair)
-        if pos.tp_levels:
-            final_tp = self._get_final_tp_level(pos.direction, pos.tp_levels)
-            await self._place_take_profit_market_order(pos.pair, pos.direction, final_tp)
-            await self.db.store_modification_log(pos.pair, "set_tp", {"final_tp": str(final_tp)}, log_message_id)
-        if pos.current_sl is not None:
-            await self._place_stop_market_order(pos.pair, pos.direction, pos.current_sl)
-            await self.db.store_modification_log(pos.pair, "set_sl", {"stop_loss": str(pos.current_sl)}, log_message_id)
+        
+        try:
+            if pos.tp_levels:
+                final_tp = self._get_final_tp_level(pos.direction, pos.tp_levels)
+                try:
+                    await self._place_take_profit_market_order(pos.pair, pos.direction, final_tp)
+                    await self.db.store_modification_log(pos.pair, "set_tp", {"final_tp": str(final_tp)}, log_message_id)
+                except Exception as exc:
+                    exc_str = str(exc)
+                    if "code=-2021" in exc_str or "-2021" in exc_str or "immediately trigger" in exc_str:
+                        self._write_audit_log("tp_immediate_trigger_market_close", pair=pos.pair, error=exc_str)
+                        await self._safe_alert("send_alert", f"⚠️ TP {pos.pair} immediately triggered. Closing position at MARKET.")
+                        await self._place_full_close_market_order(pos)
+                        await self.position_manager.remove_position(pos.pair)
+                        await self._safe_alert("notify_closed", pos.pair, "tp_immediate_trigger")
+                        return
+                    else:
+                        raise exc
+
+            if pos.current_sl is not None:
+                try:
+                    await self._place_stop_market_order(pos.pair, pos.direction, pos.current_sl)
+                    await self.db.store_modification_log(pos.pair, "set_sl", {"stop_loss": str(pos.current_sl)}, log_message_id)
+                except Exception as exc:
+                    exc_str = str(exc)
+                    if "code=-2021" in exc_str or "-2021" in exc_str or "immediately trigger" in exc_str:
+                        self._write_audit_log("sl_immediate_trigger_market_close", pair=pos.pair, error=exc_str)
+                        await self._safe_alert("send_alert", f"⚠️ SL {pos.pair} immediately triggered. Closing position at MARKET.")
+                        await self._place_full_close_market_order(pos)
+                        await self.position_manager.remove_position(pos.pair)
+                        await self._safe_alert("notify_closed", pos.pair, "sl_immediate_trigger")
+                        return
+                    else:
+                        raise exc
+        except Exception as exc:
+            self._write_audit_log("set_tp_sl_orders_failed", pair=pos.pair, error=str(exc))
+            await self._safe_alert("notify_error", "trade_engine_set_tp_sl", f"failed to set TP/SL for {pos.pair}: {exc}")
+            raise exc
+
         self._write_audit_log(
             "protection_set",
             pair=pos.pair,
@@ -1885,8 +1917,15 @@ class TradeEngine:
         reached_idx = self._resolve_reached_tp_index(pos, current_price)
         is_entry2_flow = is_double_entry and entry_2_filled
 
+        is_force = False
+        if action.raw_response and action.raw_response.get("is_force_tp_partial"):
+            is_force = True
+
+        if is_force:
+            reached_idx = 1
+
         if is_entry2_flow:
-            if reached_idx not in {0, 1}:
+            if not is_force and reached_idx not in {0, 1}:
                 await self._safe_alert(
                     "notify_error",
                     "trade_engine_tp_partial",
@@ -1894,7 +1933,7 @@ class TradeEngine:
                 )
                 return
         else:
-            if reached_idx != 1:
+            if not is_force and reached_idx != 1:
                 await self._safe_alert(
                     "notify_error",
                     "trade_engine_tp_partial",

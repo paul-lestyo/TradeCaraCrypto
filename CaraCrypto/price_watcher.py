@@ -13,9 +13,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from datetime import datetime, timezone
 from decimal import Decimal
 from urllib.parse import urlparse
-from typing import Dict
+from typing import Dict, Optional
 
 import aiohttp
 
@@ -32,6 +33,7 @@ class PriceWatcher:
         self._running = False
         self._subscriptions = set()
         self._pending_limit_orders: Dict[str, TradeAction] = {}
+        self._pending_limit_order_times: Dict[str, datetime] = {}
         self._pending_order_missing_count: Dict[str, int] = {}
         self._pending_missing_max_retry = max(1, int(pending_missing_max_retry))
         self._listen_key: str | None = None
@@ -69,8 +71,9 @@ class PriceWatcher:
         self._subscriptions.discard(pair)
         print(f"[PriceWatcher] unsubscribe pair={pair} active={sorted(self._subscriptions)}")
 
-    def register_pending_order(self, order_id: str, action: TradeAction) -> None:
+    def register_pending_order(self, order_id: str, action: TradeAction, created_at: Optional[datetime] = None) -> None:
         self._pending_limit_orders[order_id] = action
+        self._pending_limit_order_times[order_id] = created_at or datetime.now(timezone.utc)
         self._pending_order_missing_count.pop(order_id, None)
         print(
             "[PriceWatcher] register_pending_order "
@@ -119,10 +122,13 @@ class PriceWatcher:
             except Exception:
                 running_pairs = None
         open_order_ids_by_pair: dict[str, set[str]] = {}
+        open_orders_by_id: dict[str, dict] = {}
+        
         for order_id, action in list(self._pending_limit_orders.items()):
             pair = action.pair or ""
             if not pair:
                 self._pending_limit_orders.pop(order_id, None)
+                self._pending_limit_order_times.pop(order_id, None)
                 continue
             if pair not in open_order_ids_by_pair:
                 open_order_ids: set[str] = set()
@@ -132,13 +138,65 @@ class PriceWatcher:
                         oid = order.get("orderId")
                         if oid is not None:
                             open_order_ids.add(str(oid))
+                            open_orders_by_id[str(oid)] = order
                 except Exception:
                     continue
                 open_order_ids_by_pair[pair] = open_order_ids
+            
             if str(order_id) in open_order_ids_by_pair[pair]:
+                # The order is still open. Let's check its age!
+                order = open_orders_by_id[str(order_id)]
+                order_time_ms = order.get("time")
+                is_expired = False
+                if order_time_ms:
+                    try:
+                        order_time = datetime.fromtimestamp(order_time_ms / 1000.0, tz=timezone.utc)
+                        elapsed = datetime.now(timezone.utc) - order_time
+                        if elapsed.total_seconds() >= 24 * 3600:
+                            is_expired = True
+                    except Exception:
+                        pass
+                
+                # Check fallback local registration time
+                if not is_expired and order_id in self._pending_limit_order_times:
+                    elapsed = datetime.now(timezone.utc) - self._pending_limit_order_times[order_id]
+                    if elapsed.total_seconds() >= 24 * 3600:
+                        is_expired = True
+                
+                if is_expired:
+                    print(f"[PriceWatcher] Expiration triggered (24h+): pair={pair} order_id={order_id}")
+                    try:
+                        self.trade_engine._cancel_order(pair, order_id)
+                    except Exception as exc:
+                        print(f"[PriceWatcher] Failed to cancel expired order {order_id} on Binance: {exc}")
+                    
+                    await self._safe_alert("send_alert", f"⚠️ Pending limit order for {pair} (order_id={order_id}) has expired (24h+) and was cancelled.")
+                    
+                    self._pending_limit_orders.pop(order_id, None)
+                    self._pending_limit_order_times.pop(order_id, None)
+                    self._pending_order_missing_count.pop(order_id, None)
+                    
+                    has_other_pending = False
+                    for other_action in self._pending_limit_orders.values():
+                        if other_action.pair == pair:
+                            has_other_pending = True
+                            break
+                    if not has_other_pending:
+                        has_pending = getattr(self.position_manager, "has_pending_position", None)
+                        pending_exists = bool(callable(has_pending) and has_pending(pair))
+                        if self.position_manager.get_position(pair) or pending_exists:
+                            await self.position_manager.remove_position(pair)
+                        has_pos = getattr(self.position_manager, "has_position", None)
+                        if not callable(has_pos) or not has_pos(pair):
+                            await self.unsubscribe(pair)
+                        await self._safe_alert("notify_closed", pair, "cancel")
+                    continue
+                
                 self._pending_order_missing_count.pop(order_id, None)
                 continue
+            
             if running_pairs is not None and pair in running_pairs:
+                self._pending_limit_order_times.pop(order_id, None)
                 await self._handle_order_update(str(order_id), "LIMIT", "FILLED", pair)
                 continue
             missing_count = self._pending_order_missing_count.get(order_id, 0) + 1
@@ -154,6 +212,7 @@ class PriceWatcher:
                 f"pair={pair} order_id={order_id} missing_count={missing_count}"
             )
             self._pending_limit_orders.pop(order_id, None)
+            self._pending_limit_order_times.pop(order_id, None)
             self._pending_order_missing_count.pop(order_id, None)
             has_pending = getattr(self.position_manager, "has_pending_position", None)
             pending_exists = bool(callable(has_pending) and has_pending(pair))
@@ -360,6 +419,7 @@ class PriceWatcher:
         limit_fill_handled = False
         if order_id in self._pending_limit_orders and order_type == "LIMIT" and status == "FILLED":
             action = self._pending_limit_orders.pop(order_id)
+            self._pending_limit_order_times.pop(order_id, None)
             self._pending_order_missing_count.pop(order_id, None)
             pair_for_pos = action.pair or pair
             
@@ -406,6 +466,7 @@ class PriceWatcher:
             limit_fill_handled = True
         if order_id in self._pending_limit_orders and order_type == "LIMIT" and status in {"CANCELED", "EXPIRED", "REJECTED"}:
             action = self._pending_limit_orders.pop(order_id, None)
+            self._pending_limit_order_times.pop(order_id, None)
             self._pending_order_missing_count.pop(order_id, None)
             target_pair = pair
             if action and action.direction:

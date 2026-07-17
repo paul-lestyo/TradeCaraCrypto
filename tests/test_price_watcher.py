@@ -251,3 +251,37 @@ def test_write_trades_json_file_writing_property():
         if backup_path.exists():
             backup_path.rename(log_path)
 
+
+@pytest.mark.asyncio
+async def test_pending_limit_order_expired_after_24h_property():
+    from datetime import timedelta, timezone
+    pos = RunningPosition("BTCUSDT", Direction.LONG, Decimal("100"), Decimal("95"), [Decimal("110")], 50, "1", Decimal("0.1"), datetime.utcnow())
+    alert = _Alert()
+    pm = _PM(pos)
+    w = PriceWatcher(alert, pm)
+    
+    class _TEMock:
+        def __init__(self):
+            self.cancelled = []
+        def _get_open_orders(self, pair):
+            order_time = (datetime.now(timezone.utc) - timedelta(hours=25)).timestamp() * 1000.0
+            return [{"orderId": "oid-expired", "type": "LIMIT", "time": order_time}]
+        def _cancel_order(self, pair, order_id):
+            self.cancelled.append((pair, order_id))
+            
+    te = _TEMock()
+    w.trade_engine = te
+    
+    await w.subscribe("BTCUSDT")
+    w.register_pending_order("oid-expired", TradeAction(action=GeminiAction.NEW_SIGNAL, pair="BTCUSDT"))
+    
+    assert "oid-expired" in w._pending_limit_orders
+    assert "oid-expired" in w._pending_limit_order_times
+    
+    await w._reconcile_pending_limit_orders()
+    
+    assert ("BTCUSDT", "oid-expired") in te.cancelled
+    assert "oid-expired" not in w._pending_limit_orders
+    assert "oid-expired" not in w._pending_limit_order_times
+    assert "BTCUSDT" in pm.removed
+

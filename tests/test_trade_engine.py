@@ -1036,3 +1036,72 @@ async def test_opposite_direction_risk_exempt_and_tp_adjust_property():
     assert ("TUSDT", [Decimal("105"), Decimal("105")]) in tp_updated
 
 
+@pytest.mark.asyncio
+async def test_tp_partial_forced_bypass_price_check_property():
+    e = _engine()
+    e.client.positions = [{"symbol": "BTCUSDT", "positionAmt": "0.1", "entryPrice": "100"}]
+    pos = RunningPosition(
+        "BTCUSDT", Direction.LONG, Decimal("100"), Decimal("90"), 
+        [Decimal("105"), Decimal("110")], 50, "1", Decimal("0.1"), datetime.utcnow()
+    )
+    await e.position_manager.add_position(pos)
+    
+    async def mock_get_price(pair):
+        return Decimal("101")
+    e._get_market_reference_price = mock_get_price
+    
+    action = TradeAction(
+        action=GeminiAction.TP_PARTIAL,
+        pair="BTCUSDT",
+        risk_level=RiskLevel.NORMAL,
+        raw_response={"is_force_tp_partial": True}
+    )
+    
+    success = await e.execute_action(action)
+    assert success is True
+    
+    close_orders = [o for o in e.client.orders if o.get("type") == "MARKET" and o.get("reduceOnly") == "true"]
+    assert close_orders
+    stop_orders = [o for o in e.client.orders if o.get("type") == "STOP_MARKET"]
+    assert stop_orders
+    assert stop_orders[-1].get("stopPrice") == "105"
+    assert pos.last_tp_partial_index_applied == 1
+
+
+@pytest.mark.asyncio
+async def test_set_tp_sl_orders_handles_immediate_trigger_sl_failure_property():
+    e = _engine()
+    pos = RunningPosition(
+        "BTCUSDT", Direction.LONG, Decimal("100"), Decimal("90"), 
+        [Decimal("110")], 50, "1", Decimal("0.1"), datetime.utcnow()
+    )
+    await e.position_manager.add_position(pos)
+    
+    from binance.exceptions import BinanceAPIException
+    import requests
+    
+    class _MockResponse:
+        status_code = 400
+        text = '{"code": -2021, "msg": "Order would immediately trigger."}'
+        headers = {}
+        
+    def mock_create_order(**kwargs):
+        if kwargs.get("type") == "STOP_MARKET":
+            r = requests.Response()
+            r.status_code = 400
+            r._content = b'{"code": -2021, "msg": "Order would immediately trigger."}'
+            raise BinanceAPIException(r, 400, r.text)
+        order = {"orderId": 999, "symbol": kwargs.get("symbol"), "type": kwargs.get("type")}
+        e.client.orders.append(order)
+        return order
+        
+    e.client.new_order = mock_create_order
+    
+    await e._set_tp_sl_orders(pos)
+    
+    assert e.position_manager.get_position("BTCUSDT") is None
+    close_orders = [o for o in e.client.orders if o.get("type") == "MARKET"]
+    assert close_orders
+    assert any("immediately triggered" in msg for msg in e.alert_service.sent_alerts)
+
+
