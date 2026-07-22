@@ -46,3 +46,12 @@
 {"timestamp": "2026-07-06T21:15:39.457685+00:00", "event": "limit_order_filled", "pair": "BTCUSDT", "order_id": "oid1", "entry_price": "100", "quantity": "0.1", "source": "socket"}
 {"timestamp": "2026-07-06T21:15:39.461090+00:00", "event": "position_closed", "pair": "BTCUSDT", "reason": "TP", "source": "socket"}
 {"timestamp": "2026-07-06T21:15:39.466437+00:00", "event": "position_closed", "pair": "BTCUSDT", "reason": "manual_close", "source": "socket"}
+{"timestamp": "2026-07-22T05:36:53.016909+00:00", "event": "limit_order_filled", "pair": "BTCUSDT", "order_id": "oid1", "entry_price": "100", "quantity": "0.1", "source": "socket"}
+{"timestamp": "2026-07-22T05:36:53.016909+00:00", "event": "position_closed", "pair": "BTCUSDT", "reason": "TP", "source": "socket"}
+{"timestamp": "2026-07-22T05:36:53.026903+00:00", "event": "position_closed", "pair": "BTCUSDT", "reason": "manual_close", "source": "socket"}
+{"timestamp": "2026-07-22T05:37:25.222284+00:00", "event": "limit_order_filled", "pair": "BTCUSDT", "order_id": "oid1", "entry_price": "100", "quantity": "0.1", "source": "socket"}
+{"timestamp": "2026-07-22T05:37:25.239463+00:00", "event": "position_closed", "pair": "BTCUSDT", "reason": "TP", "source": "socket"}
+{"timestamp": "2026-07-22T05:37:25.258964+00:00", "event": "position_closed", "pair": "BTCUSDT", "reason": "manual_close", "source": "socket"}
+{"timestamp": "2026-07-22T05:37:44.075352+00:00", "event": "limit_order_filled", "pair": "BTCUSDT", "order_id": "oid1", "entry_price": "100", "quantity": "0.1", "source": "socket"}
+{"timestamp": "2026-07-22T05:37:44.077768+00:00", "event": "position_closed", "pair": "BTCUSDT", "reason": "TP", "source": "socket"}
+{"timestamp": "2026-07-22T05:37:44.084583+00:00", "event": "position_closed", "pair": "BTCUSDT", "reason": "manual_close", "source": "socket"}

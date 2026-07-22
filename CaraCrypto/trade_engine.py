@@ -538,9 +538,12 @@ class TradeEngine:
         return decimal_value
 
     def _calculate_margin_budget(self, balance: Decimal, risk_level: RiskLevel) -> Decimal:
-        margin_pct = Decimal(str(self.risk_config.trade_margin_percent)) / Decimal("100")
-        base_margin = balance * margin_pct
-        return max(base_margin, Decimal("0"))
+        risk_pct = Decimal(str(self.risk_config.trade_margin_percent)) / Decimal("100")
+        risk_budget = balance * risk_pct
+        if risk_level == RiskLevel.HIGH:
+            multiplier = Decimal(str(getattr(self.risk_config, "high_risk_multiplier", 0.5)))
+            risk_budget *= multiplier
+        return max(risk_budget, Decimal("0"))
 
     def _calculate_position_size(
         self, entry_price: Decimal, leverage: int, risk_level: RiskLevel, balance: Decimal
@@ -988,11 +991,26 @@ class TradeEngine:
                 entry_1_price = zone_low
                 entry_2_price = zone_high
 
-            budget_1 = account_balance * Decimal("0.01")  # 1.0%
-            budget_2 = account_balance * Decimal("0.04")  # 4.0%
+            total_risk = self._calculate_margin_budget(account_balance, action.risk_level)
+            risk_1 = total_risk * Decimal("0.20")
+            risk_2 = total_risk * Decimal("0.80")
 
-            qty_1_raw = (budget_1 * Decimal(leverage)) / entry_1_price
-            qty_2_raw = (budget_2 * Decimal(leverage)) / entry_2_price
+            sl_dist_1 = abs(entry_1_price - action.stop_loss)
+            sl_dist_2 = abs(entry_2_price - action.stop_loss)
+
+            qty_1_raw = (risk_1 / sl_dist_1) if sl_dist_1 > 0 else Decimal("0")
+            qty_2_raw = (risk_2 / sl_dist_2) if sl_dist_2 > 0 else Decimal("0")
+
+            # Safety cap: limit margin used to 5.0% of account balance total to prevent over-leveraging
+            max_margin_total = account_balance * Decimal("0.05")
+            max_margin_1 = max_margin_total * Decimal("0.20")
+            max_margin_2 = max_margin_total * Decimal("0.80")
+
+            max_qty_1 = (max_margin_1 * Decimal(leverage)) / entry_1_price if entry_1_price > 0 else Decimal("0")
+            max_qty_2 = (max_margin_2 * Decimal(leverage)) / entry_2_price if entry_2_price > 0 else Decimal("0")
+
+            qty_1_raw = min(qty_1_raw, max_qty_1)
+            qty_2_raw = min(qty_2_raw, max_qty_2)
 
             qty_1, normalized_entry_1 = self._normalize_order_inputs(action.pair, qty_1_raw, entry_1_price)
             qty_2, normalized_entry_2 = self._normalize_order_inputs(action.pair, qty_2_raw, entry_2_price)
@@ -1102,6 +1120,9 @@ class TradeEngine:
             _, detail_sl = self._normalize_order_inputs(action.pair, Decimal("1"), pos.current_sl) if pos.current_sl is not None else (Decimal("1"), None)
             _, detail_tp = self._normalize_order_inputs(action.pair, Decimal("1"), final_tp) if final_tp is not None else (Decimal("1"), None)
 
+            actual_margin_1 = self._calculate_effective_margin_used(entry_1_price, qty_1, leverage)
+            actual_margin_2 = self._calculate_effective_margin_used(entry_2_price, qty_2, leverage)
+
             await self._safe_alert(
                 "notify_new_order_detail",
                 action.pair,
@@ -1110,7 +1131,7 @@ class TradeEngine:
                 f"{entry_1_price}/{entry_2_price}",
                 f"{qty_1}/{qty_2}",
                 leverage,
-                f"{(budget_1 + budget_2):.2f}",
+                f"{(actual_margin_1 + actual_margin_2):.2f}",
                 str(detail_sl) if detail_sl is not None else None,
                 str(detail_tp) if detail_tp is not None else None,
                 action.action.value,
@@ -1118,7 +1139,6 @@ class TradeEngine:
                 None,
                 f"{entry_1_price}/{entry_2_price}",
             )
-
             self._write_audit_log(
                 "new_signal_executed",
                 pair=action.pair,
@@ -1136,7 +1156,7 @@ class TradeEngine:
                 entry_raw=f"{entry_1_price}/{entry_2_price}",
                 entry_final=f"{entry_1_price}/{entry_2_price}",
                 qty=f"{qty_1}/{qty_2}",
-                margin_used=budget_1 + budget_2,
+                margin_used=actual_margin_1 + actual_margin_2,
                 stop_loss=detail_sl,
                 take_profit=detail_tp,
                 entry_zone=action.entry_zone,
@@ -1161,8 +1181,14 @@ class TradeEngine:
                 )
                 return False
 
-            budget = account_balance * Decimal("0.05")  # 5.0%
-            qty_raw = (budget * Decimal(leverage)) / entry_price_final
+            total_risk = self._calculate_margin_budget(account_balance, action.risk_level)
+            sl_dist = abs(entry_price_final - action.stop_loss)
+            qty_raw = (total_risk / sl_dist) if sl_dist > 0 else Decimal("0")
+
+            # Safety cap: limit margin used to 5.0% of account balance to prevent over-leveraging
+            max_margin = account_balance * Decimal("0.05")
+            max_qty = (max_margin * Decimal(leverage)) / entry_price_final if entry_price_final > 0 else Decimal("0")
+            qty_raw = min(qty_raw, max_qty)
 
             qty, normalized_entry = self._normalize_order_inputs(action.pair, qty_raw, entry_price_final)
             entry_price_final = normalized_entry if normalized_entry is not None else entry_price_final
@@ -1231,6 +1257,8 @@ class TradeEngine:
             _, detail_sl = self._normalize_order_inputs(action.pair, Decimal("1"), pos.current_sl) if pos.current_sl is not None else (Decimal("1"), None)
             _, detail_tp = self._normalize_order_inputs(action.pair, Decimal("1"), final_tp) if final_tp is not None else (Decimal("1"), None)
 
+            actual_margin = self._calculate_effective_margin_used(entry_price_final, qty, leverage)
+
             await self._safe_alert(
                 "notify_new_order_detail",
                 action.pair,
@@ -1239,7 +1267,7 @@ class TradeEngine:
                 str(entry_price_final),
                 str(qty),
                 leverage,
-                f"{budget:.2f}",
+                f"{actual_margin:.2f}",
                 str(detail_sl) if detail_sl is not None else None,
                 str(detail_tp) if detail_tp is not None else None,
                 action.action.value,
@@ -1247,7 +1275,6 @@ class TradeEngine:
                 None,
                 str(entry_price_final),
             )
-
             self._write_audit_log(
                 "new_signal_executed",
                 pair=action.pair,
@@ -1263,7 +1290,7 @@ class TradeEngine:
                 entry_raw=entry_price_final,
                 entry_final=entry_price_final,
                 qty=qty,
-                margin_used=budget,
+                margin_used=actual_margin,
                 stop_loss=detail_sl,
                 take_profit=detail_tp,
                 entry_zone=action.entry_zone,
@@ -1915,8 +1942,6 @@ class TradeEngine:
                     entry_2_filled = False
 
         reached_idx = self._resolve_reached_tp_index(pos, current_price)
-        is_entry2_flow = is_double_entry and entry_2_filled
-
         is_force = False
         if action.raw_response and action.raw_response.get("is_force_tp_partial"):
             is_force = True
@@ -1924,20 +1949,22 @@ class TradeEngine:
         if is_force:
             reached_idx = 1
 
-        if is_entry2_flow:
-            if not is_force and reached_idx not in {0, 1}:
-                await self._safe_alert(
-                    "notify_error",
-                    "trade_engine_tp_partial",
-                    f"skip pair={action.pair} reason=tp_level_not_allowed reached_level=TP{reached_idx + 1}",
-                )
-                return
-        else:
+        restrict_tp1 = is_double_entry and not entry_2_filled
+
+        if restrict_tp1:
             if not is_force and reached_idx != 1:
                 await self._safe_alert(
                     "notify_error",
                     "trade_engine_tp_partial",
                     f"skip pair={action.pair} reason=tp_level_not_tp2 reached_level=TP{reached_idx + 1}",
+                )
+                return
+        else:
+            if not is_force and reached_idx not in {0, 1}:
+                await self._safe_alert(
+                    "notify_error",
+                    "trade_engine_tp_partial",
+                    f"skip pair={action.pair} reason=tp_level_not_allowed reached_level=TP{reached_idx + 1}",
                 )
                 return
 
@@ -1950,7 +1977,7 @@ class TradeEngine:
             return
 
         ordered_tp = self._ordered_tp_levels(pos)
-        if is_entry2_flow and reached_idx == 0:
+        if not restrict_tp1 and reached_idx == 0:
             close_percentage = 70.0
             new_sl = self._compute_sl_plus_from_entry(pos.direction, pos.entry_price)
         else:
@@ -2017,11 +2044,51 @@ class TradeEngine:
     async def _handle_cutloss(self, action: TradeAction, message_db_id: Optional[int]) -> None:
         if not action.pair:
             return
-        await self._cleanup_protection_orders(action.pair)
-        await self.position_manager.remove_position(action.pair)
-        await self._safe_alert("notify_closed", action.pair, "cutloss")
-        await self.db.store_modification_log(action.pair, "cutloss", {}, message_db_id)
-        self._write_audit_log("position_closed", pair=action.pair, message_db_id=message_db_id, reason="cutloss")
+        action.pair = self._normalize_pair(action.pair)
+        pos = await self._resolve_open_position(action.pair, action, message_db_id)
+        if pos:
+            await self._cleanup_protection_orders(action.pair)
+            try:
+                closed_qty = await self._place_full_close_market_order(pos)
+            except Exception as exc:
+                await self._safe_alert(
+                    "notify_error",
+                    "trade_engine_cutloss",
+                    f"pair={action.pair} reason=close_order_failed err={exc}",
+                )
+                self._write_audit_log(
+                    "position_close_failed",
+                    pair=action.pair,
+                    message_db_id=message_db_id,
+                    reason="cutloss",
+                    error=str(exc),
+                )
+                return
+            await self.position_manager.remove_position(action.pair)
+            await self._safe_alert("notify_closed", action.pair, "cutloss")
+            await self.db.store_modification_log(
+                action.pair,
+                "cutloss",
+                {"closed_qty": str(closed_qty), "close_order_type": "MARKET", "reduce_only": True},
+                message_db_id,
+            )
+            self._write_audit_log(
+                "position_closed",
+                pair=action.pair,
+                message_db_id=message_db_id,
+                reason="cutloss",
+                closed_qty=closed_qty,
+            )
+            return
+
+        has_pending = getattr(self.position_manager, "has_pending_position", None)
+        remove_pending = getattr(self.position_manager, "remove_pending_position", None)
+        if callable(has_pending) and callable(remove_pending) and has_pending(action.pair):
+            await self._cancel_pending_entry_order(action.pair)
+            await remove_pending(action.pair)
+            await self._safe_alert("notify_closed", action.pair, "cutloss")
+            await self.db.store_modification_log(action.pair, "cutloss", {"status": "pending"}, message_db_id)
+            self._write_audit_log("pending_position_canceled", pair=action.pair, message_db_id=message_db_id)
 
     async def _handle_cancel(self, action: TradeAction, message_db_id: Optional[int]) -> None:
         if not action.pair:

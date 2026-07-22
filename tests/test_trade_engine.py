@@ -501,8 +501,8 @@ async def test_margin_used_detail_uses_available_balance_and_effective_qty_prope
             risk_level=RiskLevel.NORMAL,
         )
     )
-    assert e.client.orders[0]["quantity"] == "1.02"
-    assert e.alert_service.order_details[-1][6] == "5.10"
+    assert e.client.orders[0]["quantity"] == "0.102"
+    assert e.alert_service.order_details[-1][6] == "0.51"
 
 
 @pytest.mark.asyncio
@@ -555,7 +555,7 @@ async def test_limit_order_normalizes_price_and_quantity_by_symbol_filters_prope
         )
     )
     assert accepted is True
-    assert e.client.orders[0]["quantity"] == "8100"
+    assert e.client.orders[0]["quantity"] == "426"
     assert e.client.orders[0]["price"] == "0.1234"
 
 
@@ -860,18 +860,18 @@ async def test_double_entry_size_and_routing_property():
         )
     )
     assert accepted is True
-    # Entry 1 budget: 1.0% of 1000 = 10. Qty = 10 * 20 / 0.008 = 25000
-    # Entry 2 budget: 4.0% of 1000 = 40. Qty = 40 * 20 / 0.006 = 133333.3 -> 133333
+    # Entry 1 risk: 20% of 10 = 2. Qty = 2 / 0.003 = 666.66 -> 666
+    # Entry 2 risk: 80% of 10 = 8. Qty = 8 / 0.001 = 8000 -> 8000
     # Mark price = 0.0075.
     # Entry 1 (0.0080): market_price (0.0075) <= entry_1_price (0.0080) -> MARKET
     # Entry 2 (0.0060): market_price (0.0075) <= entry_2_price (0.0060) -> LIMIT
     
     assert len(e.client.orders) == 4
     assert e.client.orders[0]["type"] == "MARKET"
-    assert e.client.orders[0]["quantity"] == "25000"
+    assert e.client.orders[0]["quantity"] == "666"
     assert e.client.orders[1]["type"] == "LIMIT"
     assert e.client.orders[1]["price"] == "0.006"
-    assert e.client.orders[1]["quantity"] == "133333"
+    assert e.client.orders[1]["quantity"] == "8000"
     assert e.client.orders[2]["type"] == "TAKE_PROFIT_MARKET"
     assert e.client.orders[3]["type"] == "STOP_MARKET"
 
@@ -1103,5 +1103,64 @@ async def test_set_tp_sl_orders_handles_immediate_trigger_sl_failure_property():
     close_orders = [o for o in e.client.orders if o.get("type") == "MARKET"]
     assert close_orders
     assert any("immediately triggered" in msg for msg in e.alert_service.sent_alerts)
+
+
+@pytest.mark.asyncio
+async def test_tp_partial_single_entry_flow_tp1_property():
+    e = _engine()
+    e.client.positions = [{"symbol": "BTCUSDT", "positionAmt": "0.1", "entryPrice": "100"}]
+    e.db.trade_plans["BTCUSDT"] = {
+        "id": 1,
+        "extracted_data": {
+            "entry_price": "100",
+            "direction": "LONG",
+        }
+    }
+    pos = RunningPosition(
+        "BTCUSDT", Direction.LONG, Decimal("100"), Decimal("85"), [Decimal("105"), Decimal("110")], 50, "1", Decimal("0.1"), datetime.utcnow()
+    )
+    await e.position_manager.add_position(pos)
+
+    def mock_mark_price(symbol=None):
+        return {"markPrice": "105"}
+    e.client.mark_price = mock_mark_price
+
+    await e.execute_action(TradeAction(action=GeminiAction.TP_PARTIAL, pair="BTCUSDT", risk_level=RiskLevel.NORMAL))
+
+    market_orders = [o for o in e.client.orders if o.get("type") == "MARKET" and o.get("reduceOnly") == "true"]
+    assert market_orders
+    assert market_orders[0]["quantity"] == "0.07"
+    stop_orders = [o for o in e.client.orders if o.get("type") == "STOP_MARKET"]
+    assert stop_orders
+    assert stop_orders[0]["stopPrice"] == "100.1"
+    assert pos.last_tp_partial_index_applied == 0
+
+
+@pytest.mark.asyncio
+async def test_handle_cutloss_places_full_close_market_order_property():
+    e = _engine()
+    e.client.positions = [{"symbol": "BTCUSDT", "positionAmt": "0.1", "entryPrice": "100"}]
+    pos = RunningPosition(
+        "BTCUSDT", Direction.LONG, Decimal("100"), Decimal("85"), [Decimal("105"), Decimal("110")], 50, "1", Decimal("0.1"), datetime.utcnow()
+    )
+    await e.position_manager.add_position(pos)
+
+    def mock_get_open_orders(symbol=None):
+        return [{"orderId": 101, "type": "STOP_MARKET"}, {"orderId": 102, "type": "TAKE_PROFIT_MARKET"}]
+    e.client.futures_get_open_orders = mock_get_open_orders
+
+    # Execute cutloss
+    await e.execute_action(TradeAction(action=GeminiAction.CUTLOSS, pair="BTCUSDT", risk_level=RiskLevel.NORMAL))
+
+    # Assert that positions and protection orders are cleaned up, and a market order was placed to close the position
+    assert e.position_manager.get_position("BTCUSDT") is None
+    assert any(o["orderId"] == 101 for o in e.client.canceled)
+    assert any(o["orderId"] == 102 for o in e.client.canceled)
+
+    market_orders = [o for o in e.client.orders if o.get("type") == "MARKET" and o.get("reduceOnly") == "true"]
+    assert market_orders
+    assert market_orders[0]["quantity"] == "0.1"
+    assert e.alert_service.closed[-1] == ("BTCUSDT", "cutloss")
+
 
 
