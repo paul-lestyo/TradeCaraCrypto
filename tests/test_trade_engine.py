@@ -1163,4 +1163,35 @@ async def test_handle_cutloss_places_full_close_market_order_property():
     assert e.alert_service.closed[-1] == ("BTCUSDT", "cutloss")
 
 
+@pytest.mark.asyncio
+async def test_set_tp_sl_api_error_triggers_emergency_market_close_property():
+    e = _engine()
+    e.client.positions = [{"symbol": "BTCUSDT", "positionAmt": "0.1", "entryPrice": "100"}]
+    pos = RunningPosition(
+        "BTCUSDT", Direction.LONG, Decimal("100"), Decimal("85"), [Decimal("105"), Decimal("110")], 50, "1", Decimal("0.1"), datetime.utcnow()
+    )
+    await e.position_manager.add_position(pos)
+
+    from binance.exceptions import BinanceAPIException
+    import requests
+    def mock_create_order_fail(**kwargs):
+        if kwargs.get("type") == "STOP_MARKET":
+            r = requests.Response()
+            r.status_code = 500
+            r._content = b'{"code": -1001, "msg": "Internal error."}'
+            raise BinanceAPIException(r, 500, r.text)
+        order = {"orderId": 999, "symbol": kwargs.get("symbol"), "type": kwargs.get("type")}
+        e.client.orders.append(order)
+        return order
+    e.client.new_order = mock_create_order_fail
+
+    with pytest.raises(BinanceAPIException):
+        await e._set_tp_sl_orders(pos)
+
+    assert e.position_manager.get_position("BTCUSDT") is None
+    close_orders = [o for o in e.client.orders if o.get("type") == "MARKET"]
+    assert close_orders
+    assert e.alert_service.closed[-1] == ("BTCUSDT", "emergency_safety_close")
+
+
 

@@ -103,6 +103,7 @@ class SignalParser:
             "Jangan ambil bid/ask box, current price, candle price, atau label harga non-kuning sebagai entry. "
             "Jika ada beberapa label/garis kuning, tentukan direction dulu: untuk SHORT gunakan level kuning paling atas/upper entry zone; untuk LONG gunakan level kuning paling bawah/lower entry zone. "
             "Garis/label merah biasanya STOP LOSS. Garis/label hijau biasanya TAKE PROFIT bertingkat. "
+            "Untuk field risk_level, nilainya WAJIB berupa 'normal' atau 'high'. Set risk_level ke 'high' jika pesan menyebutkan kata 'high risk', 'very high risk', 'scalp', atau 'lawan arus/against trend'. Jika tidak ada indikasi tersebut, set ke 'normal'. "
             "Jika entry_zone tidak bisa didapat, baru fallback ke entry_price tunggal. "
             "Gunakan Exchange state (Binance) untuk memahami pair yang benar-benar sedang open position / open order. "
             "Tag [OPEN]/[CLOSED] condong new_signal, [CANCEL] condong cancel."

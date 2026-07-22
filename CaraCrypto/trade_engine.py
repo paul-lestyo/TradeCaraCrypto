@@ -1678,7 +1678,21 @@ class TradeEngine:
                         raise exc
         except Exception as exc:
             self._write_audit_log("set_tp_sl_orders_failed", pair=pos.pair, error=str(exc))
-            await self._safe_alert("notify_error", "trade_engine_set_tp_sl", f"failed to set TP/SL for {pos.pair}: {exc}")
+            await self._safe_alert(
+                "send_alert",
+                f"🚨 Failed to set TP/SL for {pos.pair} due to API error: {exc}. Closing position at MARKET for safety!"
+            )
+            try:
+                await self._place_full_close_market_order(pos)
+            except Exception as close_exc:
+                self._write_audit_log("emergency_close_failed", pair=pos.pair, error=str(close_exc))
+                await self._safe_alert(
+                    "notify_error",
+                    "trade_engine_emergency_close",
+                    f"CRITICAL: Failed to emergency close position for {pos.pair}: {close_exc}",
+                )
+            await self.position_manager.remove_position(pos.pair)
+            await self._safe_alert("notify_closed", pos.pair, "emergency_safety_close")
             raise exc
 
         self._write_audit_log(
